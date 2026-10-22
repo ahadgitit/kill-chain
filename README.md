@@ -29,7 +29,12 @@ All figures are rough open-source estimates in `js/data.js`. Real performance is
 - Tap a flight to select it. Tap the map to move it there (it orbits on arrival).
 - With a flight selected, tap an enemy track to attack it, or tap a red target site to strike it.
 - Tap an airbase to scramble reserve flights.
-- Drag to pan; pinch or scroll to zoom. Space pauses; keys 1–5 set speed; Esc deselects; R toggles radar.
+- **BREAK** (B) turns tail and runs, so a long-range missile burns out chasing you. **NOTCH** (N) flies at 90° to a close, fast missile to hide in radar clutter. Jets defend automatically when warned; these buttons let you choose the move, or act before any warning.
+- Incoming missiles show a line to their target: red while they can still reach it, grey dashed once they are losing energy.
+- ⚠ in the top bar auto-pauses the game on missile warnings.
+- Drag to pan; pinch or scroll to zoom. Space pauses; keys 1–5 set speed; Esc deselects; R toggles radar; B/N break/notch.
+
+New players: start with **Training: Missile Evasion** on the main menu (four short lessons).
 
 ## Code
 

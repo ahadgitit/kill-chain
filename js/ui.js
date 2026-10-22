@@ -8,7 +8,10 @@
   const R = new KC.Renderer(canvas);
   const ui = { side: 'IN', sel: null, marks: [], speed: 5 };
   let sim = null;
-  let evIndex = 0;
+  let evSeen = 0;
+  let autoPause = true;
+  let lastAutoPause = -1e9;
+  try { autoPause = localStorage.getItem('kc-autopause') !== '0'; } catch (e) { /* storage unavailable */ }
   let last = performance.now();
   let panelTimer = 0;
   let debriefShown = false;
@@ -22,18 +25,22 @@
   R.fit(28.4, 70.6, 35.0, 77.6, 16);
 
   // ---------- game lifecycle ----------
-  function start(side) {
+  function start(side, scenario, opts) {
+    opts = opts || {};
     ui.side = side;
     ui.sel = null;
-    sim = new KC.Sim(KC.SCENARIO, side);
-    evIndex = 0;
+    ui.training = !!opts.training;
+    document.body.classList.toggle('training', ui.training);
+    sim = new KC.Sim(scenario || KC.SCENARIO, side);
+    evSeen = 0;
     debriefShown = false;
     $('ticker').innerHTML = '';
     $('log-body').innerHTML = '';
     $('menu').classList.add('hidden');
-    R.fit(28.4, 70.6, 35.0, 77.6, 16);
+    R.fit(...(opts.fit || [28.4, 70.6, 35.0, 77.6]), 16);
     setSpeed(0);
-    briefing(side);
+    if (!ui.training) briefing(side);
+    return sim;
   }
 
   function briefing(side) {
@@ -102,10 +109,18 @@
 
   // ---------- speed / top bar ----------
   function setSpeed(v) {
+    if (v > 0) ui.lastSpeed = v;
     ui.speed = v;
     for (const b of document.querySelectorAll('#speed button')) b.classList.toggle('on', +b.dataset.speed === v);
   }
   for (const b of document.querySelectorAll('#speed button')) b.onclick = () => setSpeed(+b.dataset.speed);
+  $('btn-autopause').classList.toggle('on', autoPause);
+  $('btn-autopause').onclick = () => {
+    autoPause = !autoPause;
+    $('btn-autopause').classList.toggle('on', autoPause);
+    try { localStorage.setItem('kc-autopause', autoPause ? '1' : '0'); } catch (e) { /* storage unavailable */ }
+    hint(autoPause ? 'Auto-pause ON: the game pauses when one of your jets is warned' : 'Auto-pause OFF');
+  };
   $('btn-sensors').onclick = () => { R.showSensors = !R.showSensors; $('btn-sensors').classList.toggle('on', R.showSensors); };
   $('btn-log').onclick = () => { $('log').classList.toggle('hidden'); $('btn-log').classList.toggle('on'); };
   $('log-close').onclick = () => { $('log').classList.add('hidden'); $('btn-log').classList.remove('on'); };
@@ -119,6 +134,9 @@
   function hint(text) {
     const h = $('hint');
     h.textContent = text;
+    // Sit just above the unit panel when it is open, so it never covers the event ticker.
+    const pn = $('panel');
+    h.style.bottom = pn.classList.contains('hidden') ? '' : `${pn.getBoundingClientRect().height + 22}px`;
     h.classList.add('show');
     clearTimeout(hintTimer);
     hintTimer = setTimeout(() => h.classList.remove('show'), 3200);
@@ -126,9 +144,11 @@
 
   function pumpEvents() {
     const tk = $('ticker'), lg = $('log-body');
-    while (evIndex < sim.events.length) {
-      const e = sim.events[evIndex++];
+    for (const e of sim.events) {
+      if (e.n <= evSeen) continue;
+      evSeen = e.n;
       if (e.side !== ui.side && e.side !== 'ALL') continue;
+      if (e.alert) onAlert(e);
       const html = `<span class="ev-t">${sim.clock(e.t).slice(0, 4)}</span>${escapeHtml(e.text)}`;
       const d = document.createElement('div');
       d.className = 'ev-' + e.cls;
@@ -143,11 +163,22 @@
     }
     while (lg.children.length > 300) lg.lastChild.remove();
   }
+  // Missile warning on one of our jets: optionally pause and focus it so the player can react.
+  function onAlert(e) {
+    if (!autoPause || ui.training || ui.speed === 0) return;
+    const now = performance.now();
+    if (now - lastAutoPause < 4000) return;
+    lastAutoPause = now;
+    setSpeed(0);
+    if (e.ref && e.ref.state === 'air') select(e.ref);
+    hint('Paused: missile warning. Choose BREAK or NOTCH, or press play to let the jet defend itself');
+  }
   const escapeHtml = s => s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 
   function updateTop() {
     $('clock').textContent = sim.clock() + (ui.speed === 0 ? ' ⏸' : '');
     const s = sim.score, me = ui.side, them = ENEMY[me];
+    if (ui.training) { $('score').innerHTML = '<span class="in">TRAINING</span>'; return; }
     const rem = Math.max(0, sim.duration - sim.t);
     const mm = Math.floor(rem / 60), ss = String(Math.floor(rem % 60)).padStart(2, '0');
     const obj = me === 'IN'
@@ -243,13 +274,21 @@
     // Own flight
     const u = ref, def = u.def;
     const threats = u.threats.filter(m => !m.dead).length;
+    const near = u.threats.filter(m => !m.dead).sort((a, b) => dist(a, u) - dist(b, u))[0];
+    let threatRow = '';
+    if (near) {
+      const th = sim.missileThreat(near, false), thd = sim.missileThreat(near, true);
+      threatRow = `<div class="row warn">⚠ ${threats} missile${threats > 1 ? 's' : ''} inbound · nearest ${near.w.name} M${th.mach.toFixed(1)}, ${th.d.toFixed(0)} km</div>` +
+        `<div class="row"><span class="k">If you BREAK now:</span> ${thd.lethal ? '<span class="warn">it still catches you, so NOTCH</span>' : 'it runs out of energy'}</div>`;
+    }
+    const defRow = u.defending ? `<div class="row warn">DEFENDING: ${u.defMode === 'notch' ? 'NOTCH (beaming the missile)' : 'BREAK/DRAG (running away)'}${u.manualDef ? ' · manual' : ' · auto'}</div>` : '';
     let info = head(`${u.callsign} · ${def.name}${u.count > 1 ? ' ×' + u.count : ''}`, u.side) +
       `<div class="row">${status(u)}</div>` +
       (Object.keys(u.wpn).length ? `<div class="row">${wpnChips(u)}</div>` : '') +
       `<div class="row"><span class="k">Radar</span> ${def.role === 'aew' ? 'ON (AEW&C)' : u.radarOn ? 'ON, emitting' : 'OFF, silent'}` +
       ` · <span class="k">Link</span> ${def.linked ? 'on net' : '<span class="warn">none</span>'}` +
       (u.state === 'air' ? ` · <span class="k">Fuel</span><span class="bar"><i style="width:${Math.round(100 * Math.min(1, u.fuel / (def.role === 'aew' ? 20000 : 9000)))}%"></i></span>` : '') + `</div>` +
-      (threats ? `<div class="row warn">⚠ ${threats} missile${threats > 1 ? 's' : ''} tracking this flight</div>` : '') +
+      threatRow + defRow +
       `<div class="note">${def.note}</div>`;
     if (u.state !== 'air') return { info, btns: '' };
     let btns = '';
@@ -257,6 +296,9 @@
       btns += `<button data-act="radar" class="${u.radarOn ? 'on' : ''}">RADAR ${u.radarOn ? 'ON' : 'OFF'}</button>`;
       btns += `<button data-act="roe" class="${u.roe === 'free' ? 'on' : ''}">ROE ${u.roe === 'free' ? 'FREE' : 'HOLD'}</button>`;
     }
+    const md = u.manualDef && u.manualDef.mode;
+    btns += `<button data-act="break" class="${md === 'drag' ? 'on' : ''}">BREAK</button>`;
+    if (def.role === 'fighter') btns += `<button data-act="notch" class="${md === 'notch' ? 'on' : ''}">NOTCH</button>`;
     btns += `<button data-act="rtb" class="danger">RTB</button>`;
     return { info, btns };
   }
@@ -310,12 +352,29 @@
     } else if (act === 'roe') {
       ref.roe = ref.roe === 'free' ? 'hold' : 'free';
       hint(ref.roe === 'free' ? 'Weapons free: fires on its own at good targets' : 'Weapons hold: fires only on your attack order');
+    } else if (act === 'break' || act === 'notch') {
+      defend(ref, act === 'break' ? 'drag' : 'notch');
+      return;
     } else if (act === 'rtb') {
       sim.cmdRTB(ref);
       hint(`${ref.callsign} returning to ${ref.base}`);
     }
     renderPanel(true);
   });
+
+  function defend(u, mode) {
+    const cur = u.manualDef && u.manualDef.mode;
+    if (cur === mode) {
+      sim.cmdDefend(u, null);
+      hint(`${u.callsign}: defence back on automatic`);
+    } else {
+      sim.cmdDefend(u, mode);
+      hint(mode === 'drag' ? `${u.callsign} BREAK: turning away at full speed, making the missile chase`
+        : `${u.callsign} NOTCH: flying at 90° to the missile to hide in the radar clutter`);
+    }
+    if (ui.speed === 0 && !ui.training) setSpeed(ui.lastSpeed || 5);
+    renderPanel(true);
+  }
 
   // ---------- picking & commands ----------
   function pick(sx, sy) {
@@ -433,11 +492,14 @@
 
   window.addEventListener('keydown', e => {
     if (!sim) return;
-    if (e.code === 'Space') { e.preventDefault(); setSpeed(ui.speed ? 0 : 5); }
+    if (e.code === 'Space') { e.preventDefault(); setSpeed(ui.speed ? 0 : ui.lastSpeed || 5); }
     const map = { Digit1: 0, Digit2: 1, Digit3: 5, Digit4: 15, Digit5: 40 };
     if (e.code in map) setSpeed(map[e.code]);
     if (e.code === 'Escape') select(null);
     const ref = ui.sel && ui.sel.ref;
+    if ((e.code === 'KeyB' || e.code === 'KeyN') && ref && ref.kind === 'air' && ref.side === ui.side && ref.state === 'air') {
+      if (e.code === 'KeyB' || ref.def.role === 'fighter') defend(ref, e.code === 'KeyB' ? 'drag' : 'notch');
+    }
     if (e.code === 'KeyR' && ref && ref.kind === 'air' && ref.side === ui.side && ref.def.role === 'fighter') {
       ref.radarOn = !ref.radarOn; renderPanel(true);
     }
@@ -453,11 +515,12 @@
       pumpEvents();
       panelTimer -= dt;
       if (panelTimer <= 0) { renderPanel(false); updateTop(); panelTimer = 0.25; }
-      if (sim.over && !debriefShown) { renderPanel(false); updateTop(); showDebrief(); }
+      if (KC.training && ui.training) KC.training.tick();
+      if (sim.over && !debriefShown && !ui.training) { renderPanel(false); updateTop(); showDebrief(); }
     }
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
 
-  KC.app = { ui, R, get sim() { return sim; }, start, setSpeed };
+  KC.app = { ui, R, get sim() { return sim; }, start, setSpeed, select, hint, renderPanel, showMenu: () => { ui.training = false; document.body.classList.remove('training'); sim = null; $('panel').classList.add('hidden'); $('menu').classList.remove('hidden'); } };
 })(globalThis.KC);

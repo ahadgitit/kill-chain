@@ -254,6 +254,7 @@
           c.setLineDash(m.kind === 'cruise' ? [2, 3] : []);
           c.stroke(); c.setLineDash([]); c.globalAlpha = 1;
         }
+        if (m.kind !== 'cruise' && sim.isAlive(m.target)) this.drawThreatLine(sim, m, side, p);
         c.fillStyle = m.kind === 'cruise' ? col : COL.white;
         c.beginPath(); c.arc(p.x, p.y, m.kind === 'cruise' ? 2.2 : 1.8, 0, Math.PI * 2); c.fill();
         if (m.kind !== 'cruise' && m.lock) {
@@ -261,6 +262,27 @@
           c.beginPath(); c.arc(p.x, p.y, 4, 0, Math.PI * 2); c.stroke(); c.globalAlpha = 1;
         }
       }
+    }
+
+    // Incoming missiles: a line to their target, red while the missile still has the
+    // energy to reach it, grey once it is too slow. Own missiles: a faint line to the target.
+    drawThreatLine(sim, m, side, p) {
+      const c = this.ctx, t = m.target;
+      const q = this.toScreen(t.x, t.y);
+      if (m.side === side) {
+        c.strokeStyle = COL[side]; c.globalAlpha = 0.25; c.setLineDash([2, 4]);
+        c.beginPath(); c.moveTo(p.x, p.y); c.lineTo(q.x, q.y); c.stroke();
+        c.setLineDash([]); c.globalAlpha = 1;
+        return;
+      }
+      const th = sim.missileThreat(m, false);
+      const col = th.lethal ? COL.site : COL.dim;
+      c.strokeStyle = col; c.lineWidth = th.lethal ? 1.5 : 1; c.globalAlpha = 0.9;
+      c.setLineDash(th.lethal ? [] : [3, 4]);
+      c.beginPath(); c.moveTo(p.x, p.y); c.lineTo(q.x, q.y); c.stroke();
+      c.setLineDash([]); c.globalAlpha = 1; c.lineWidth = 1;
+      const txt = `${m.w.name} M${th.mach.toFixed(1)} ${th.d.toFixed(0)}km ${th.lethal ? (m.lock ? 'LOCKED' : 'CLOSING') : 'LOSING ENERGY'}`;
+      this.label(txt, p.x + 6, p.y + 10, col, 'left', 10);
     }
 
     glyph(kind, role, sx, sy, hdg, col, opts) {
@@ -303,6 +325,7 @@
           c.beginPath(); c.arc(p.x, p.y, 13, 0, Math.PI * 2); c.stroke();
         }
         this.glyph(u.kind, u.def.role, p.x, p.y, u.hdg, col, { hollow: u.kind === 'air' && !u.radarOn });
+        if (u.kind === 'air' && u.defending) this.label(u.defMode === 'notch' ? 'NOTCH' : 'DRAG', p.x - 11, p.y + 14, COL.site, 'right', 9);
         if (sel) {
           c.strokeStyle = COL.white; c.lineWidth = 1;
           const r = 12;

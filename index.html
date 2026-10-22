@@ -27,6 +27,7 @@
       </div>
       <div class="spacer"></div>
       <div id="score"></div>
+      <button id="btn-autopause" class="icon on" title="Auto-pause on missile warning">⚠</button>
       <button id="btn-sensors" class="icon on" title="Show sensor coverage">◎</button>
       <button id="btn-log" class="icon" title="Event log">≡</button>
       <button id="btn-help" class="icon" title="How to play">?</button>
@@ -51,6 +52,10 @@
             <span>Air defence. Use your AEW&amp;C picture and PL-15s to shoot down strike aircraft and intercept cruise missiles.</span>
           </button>
         </div>
+        <button class="side TR" id="menu-training">
+          <b>TRAINING: MISSILE EVASION</b>
+          <span>Four short lessons: the long shot, the short shot, the silent data-link shot, and taking your own shot. Start here.</span>
+        </button>
         <button id="menu-help" class="link">HOW TO PLAY</button>
         <p class="fine">A simplified, unofficial game. Performance figures are open-source estimates; results come from the simulation each time you play, not from either side's claims. Not a historical record.</p>
       </div>
@@ -73,14 +78,21 @@
           <li><b>Tap an airbase</b> to scramble reserve flights.</li>
           <li><b>Drag</b> to pan, <b>pinch or scroll</b> to zoom. Speed buttons are at the top. On a keyboard: Space pauses, 1–5 set speed, Esc deselects.</li>
           <li><b>ROE FREE</b>: the flight fires on its own at good-quality targets. <b>HOLD</b>: it only fires when you order an attack.</li>
+          <li><b>BREAK</b> (B): turn tail and run at full speed, so the missile burns its energy chasing you. Best against long shots.</li>
+          <li><b>NOTCH</b> (N): fly at 90° to the missile. Doppler radars and radar seekers lose a target that is neither closing nor opening. Best against a close, fast missile you can't outrun.</li>
+          <li>Jets defend automatically when warned. BREAK and NOTCH let you choose the move yourself, or act early, before any warning. Tap again to hand control back.</li>
+          <li><b>⚠</b> in the top bar pauses the game whenever one of your jets gets a missile warning.</li>
         </ul>
         <div class="h2">SYMBOLS</div>
         <ul class="controls">
           <li>▲ filled: radar ON · △ hollow: radar silent · dashed: passive (emission-only) track · ◇ target site · □ airbase · ▣ SAM site</li>
+          <li>Red line from a missile to your jet: it can still reach you. Grey dashed line: it is <b>losing energy</b> and will fall short if you keep running. The label shows its Mach number and distance.</li>
         </ul>
         <button class="primary" id="help-close">GOT IT</button>
       </div>
     </div>
+
+    <div id="coach" class="hidden"></div>
 
     <div id="debrief" class="overlay hidden"><div class="card wide" id="debrief-body"></div></div>
   </div>
@@ -90,5 +102,6 @@
   <script src="js/sim.js"></script>
   <script src="js/render.js"></script>
   <script src="js/ui.js"></script>
+  <script src="js/training.js"></script>
 </body>
 </html>

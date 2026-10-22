@@ -99,7 +99,6 @@ button { font-family: var(--font); cursor: pointer; }
   z-index: 3; pointer-events: none; transition: opacity .3s; opacity: 0; max-width: calc(100% - 20px); text-align: center;
 }
 #hint.show { opacity: 1; }
-#panel:not(.hidden) ~ #hint { bottom: auto; top: calc(56px + env(safe-area-inset-top)); }
 
 /* ---------- overlays ---------- */
 .overlay {
@@ -117,6 +116,21 @@ button { font-family: var(--font); cursor: pointer; }
 .side.IN { border-color: var(--in); } .side.IN b { color: var(--in); }
 .side.PK { border-color: var(--pk); } .side.PK b { color: var(--pk); }
 .side:hover { background: rgba(70, 210, 255, 0.06); }
+.side.TR { border-color: var(--cyan); width: 100%; margin-top: 12px; } .side.TR b { color: var(--cyan); }
+
+/* ---------- training coach ---------- */
+#coach {
+  position: absolute; right: 10px; top: calc(50px + env(safe-area-inset-top)); width: min(400px, calc(100% - 20px));
+  background: var(--panel); border: 1px solid var(--cyan); padding: 12px 14px; z-index: 7; font-size: 13px; line-height: 1.5;
+}
+#coach .ct { color: var(--cyan); letter-spacing: 1px; margin-bottom: 6px; }
+#coach p { margin: 0 0 8px; }
+#coach b { color: var(--hi); }
+#coach .warn { color: var(--red); }
+#coach .good { color: var(--pk); }
+#coach .cb { display: flex; gap: 8px; flex-wrap: wrap; }
+#coach button { background: transparent; color: var(--cyan); border: 1px solid var(--cyan); padding: 7px 12px; font-size: 12px; min-height: 34px; }
+#coach button.pri { background: var(--cyan); color: #001018; }
 .link { display: block; margin: 16px auto 0; background: none; border: 0; color: var(--cyan); text-decoration: underline; font-size: 13px; }
 .fine { color: var(--dim); font-size: 11px; text-align: center; margin: 14px 0 0; line-height: 1.4; }
 .h { color: var(--cyan); font-size: 18px; letter-spacing: 2px; margin-bottom: 10px; }
@@ -141,5 +155,7 @@ table.res th.IN { color: var(--in); } table.res th.PK { color: var(--pk); }
   #ticker { top: calc(84px + env(safe-area-inset-top)); font-size: 11px; }
   #ticker div:nth-last-child(n+4) { display: none; }
   #log { top: calc(84px + env(safe-area-inset-top)); }
-  #panel:not(.hidden) ~ #hint { top: calc(90px + env(safe-area-inset-top)); }
+  #coach { top: auto; bottom: calc(10px + env(safe-area-inset-bottom)); left: 10px; right: 10px; width: auto; max-height: 45%; overflow-y: auto; }
+  body.training #panel { bottom: auto; top: calc(84px + env(safe-area-inset-top)); }
+  body.training #ticker { display: none; }
 }

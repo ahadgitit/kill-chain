@@ -34,6 +34,7 @@
       this.units = [];
       this.missiles = [];
       this.events = [];
+      this.evSeq = 0;
       this.fx = [];
       this.over = false;
       this.sweepTimer = 0;
@@ -95,8 +96,8 @@
     site(id) { return this.sites.find(s => s.id === id); }
     unit(id) { return this.units.find(u => u.id === id); }
 
-    log(side, text, cls) {
-      this.events.push({ t: this.t, side, text, cls: cls || 'info' });
+    log(side, text, cls, extra) {
+      this.events.push({ n: ++this.evSeq, t: this.t, side, text, cls: cls || 'info', ...extra });
       if (this.events.length > 400) this.events.shift();
     }
     clock(t) {
@@ -140,7 +141,41 @@
       if (s.kind === 'air' && s.def.role === 'fighter') {
         if (Math.abs(angNorm(bearing(s, t) - s.hdg)) > GIMBAL) return false;
       }
+      if (s.kind === 'air' && this.notching(t, s)) return false;
       return true;
+    }
+    // A target flying at ~90 degrees to a pulse-Doppler radar has almost no closing
+    // speed, so the radar filters it out with the ground clutter ("the notch").
+    notching(t, obs) {
+      if (t.kind !== 'air' || !t.defending || t.defMode !== 'notch') return false;
+      const aspect = Math.abs(angNorm(t.hdg - bearing(obs, t)));
+      return Math.abs(aspect - Math.PI / 2) < 20 * DEG;
+    }
+    // Rough look at an incoming missile: its Mach number, distance, and whether it
+    // still has the energy to reach the target if the target keeps doing what it does.
+    missileThreat(m, dragging) {
+      const t = m.target;
+      const d = dist(m, t);
+      const los = bearing(m, t);
+      const tv = vel(t);
+      const away = dragging ? t.def.dash : tv.x * Math.sin(los) - tv.y * Math.cos(los);
+      const mach = m.spd / 0.295;
+      const need = Math.max(V_MIN, (dragging ? t.def.dash : t.spd) * 1.1);
+      // Fly the missile forward in 1 s steps against a target holding its current motion.
+      let v = m.spd, gap = d, tm = m.t;
+      for (let i = 0; i < 240; i++) {
+        if (tm < m.w.burn) v = Math.min(m.w.vMax, v + 0.3); else v -= m.w.drag * v;
+        tm += 1;
+        gap -= v - away;
+        if (gap <= 0) return { mach, d, lethal: v > need, tgo: i + 1 };
+        if (v < need) break;
+      }
+      return { mach, d, lethal: false };
+    }
+    autoDefMode(u, m) {
+      if (!m || m.kind === 'srm') return 'drag';
+      // Drag if the missile can be outrun; if it is too fast to outrun, notch it.
+      return this.missileThreat(m, true).lethal ? 'notch' : 'drag';
     }
     // Can unit u launch on / guide against t using its own radar or the data link?
     fireQuality(u, t) {
@@ -306,7 +341,11 @@
       const def = u.def;
       // Threat assessment.
       u.threats = u.threats.filter(m => !m.dead && m.target === u);
-      u.defending = u.threats.some(m => m.lock || (m.warned && dist(m, u) < 40));
+      const pressing = u.threats.filter(m => m.lock || (m.warned && dist(m, u) < 40));
+      if (u.manualDef && this.t > u.manualDef.until) u.manualDef = null;
+      u.defending = pressing.length > 0 || !!u.manualDef;
+      const near = u.threats.length ? u.threats.reduce((a, b) => (dist(a, u) < dist(b, u) ? a : b)) : null;
+      u.defMode = u.manualDef ? u.manualDef.mode : u.defending ? this.autoDefMode(u, near) : null;
 
       // Fuel.
       u.fuel -= dt * (u.spd > def.speed * 1.1 ? 2.5 : 1);
@@ -329,11 +368,17 @@
 
       let want = u.hdg, spd = def.speed;
       if (u.defending) {
-        const m = u.threats.reduce((a, b) => (dist(a, u) < dist(b, u) ? a : b));
-        want = bearing(m, u);
+        // Turn away from the nearest missile (or the nearest enemy, for a pre-emptive break).
+        const from = near || this.nearestEnemy(u, 400, true);
+        const away = from ? bearing(from, u) : u.hdg;
+        if (u.defMode === 'notch') {
+          const a = angNorm(away + 90 * DEG), b = angNorm(away - 90 * DEG);
+          want = Math.abs(angNorm(a - u.hdg)) < Math.abs(angNorm(b - u.hdg)) ? a : b;
+        } else want = away;
         spd = def.dash;
-        if (!u.chaffAt || this.t - u.chaffAt > 8) {
-          if (dist(m, u) < 12) { u.chaffAt = this.t; this.fx.push({ kind: 'chaff', x: u.x, y: u.y, t: this.t }); }
+        if (near && (!u.chaffAt || this.t - u.chaffAt > 8) && dist(near, u) < 12) {
+          u.chaffAt = this.t;
+          this.fx.push({ kind: 'chaff', x: u.x, y: u.y, t: this.t });
         }
       } else {
         const r = this.steer(u);
@@ -523,7 +568,7 @@
     warn(t, m, what) {
       if (t.kind !== 'air') return;
       if (!t.threats.includes(m)) t.threats.push(m);
-      this.log(t.side, `${t.callsign}: ${what}, ${m.w.name} ${dist(m, t).toFixed(0)} km`, 'warn');
+      this.log(t.side, `${t.callsign}: ${what}, ${m.w.name} ${dist(m, t).toFixed(0)} km`, 'warn', { alert: true, ref: t });
     }
 
     // ---------- missiles ----------
@@ -554,6 +599,11 @@
         m.active = true;
         if (w.kind === 'aam' && this.isAlive(m.shooter)) this.log(m.side, `${m.shooter.callsign} ${w.name} PITBULL (seeker active)`, 'info');
       }
+      // A notching target can break a radar seeker's lock.
+      if (m.lock && alive && m.kind !== 'srm' && this.notching(t, m) && this.rand() < 0.25 * dt) {
+        m.lock = false;
+        this.log(t.side, `${t.callsign} notched the ${w.name}: seeker lock broken`, 'good');
+      }
       if (m.active && !m.lock && alive) this.trySeeker(m);
 
       // Lead pursuit toward the (true or estimated) target.
@@ -574,6 +624,7 @@
       if (m.lock && alive && dist(m, t) <= m.spd * dt * 1.5 + 0.5) { this.resolve(m); return; }
       if ((m.t > w.burn && m.spd < V_MIN) || m.t > w.tMax * 1.5) {
         m.dead = true;
+        m.end = 'energy';
         if (alive && m.lock) this.log(t.side, `${t.callsign} defeated a ${w.name} (out of energy)`, 'good');
         else if (alive) this.log(m.side, `${w.name} from ${m.shooter.callsign} lost its target`, 'info');
       }
@@ -582,21 +633,32 @@
       const t = m.target;
       const d = dist(m, t);
       const off = Math.abs(angNorm(bearing(m, t) - m.hdg));
+      if (m.kind !== 'srm' && this.notching(t, m)) return;
       if (d <= m.w.seeker * 1.3 && off < 40 * DEG) {
         m.lock = true;
-        if (t.kind === 'air') this.warn(t, m, m.warned ? 'MISSILE ACTIVE' : 'MISSILE WARNING (no prior launch warning!)');
+        if (t.kind === 'air' && !m.warned) this.warn(t, m, 'MISSILE WARNING (no prior launch warning!)');
+        else if (t.kind === 'air' && !m.activeWarned) this.warn(t, m, 'MISSILE ACTIVE');
         m.warned = true;
+        m.activeWarned = true;
       }
     }
     resolve(m) {
       const t = m.target, w = m.w;
       m.dead = true;
-      let pk = w.pk * clamp((m.spd - V_MIN) / (w.vMax * 0.5), 0.25, 1);
+      const energy = clamp((m.spd - V_MIN) / (w.vMax * 0.5), 0.25, 1);
+      let pk = w.pk * energy;
       if (t.kind === 'air') {
         pk *= 1 - t.def.ew * 0.4;
-        if (t.defending) pk *= t.def.role === 'aew' ? 0.9 : 0.7;
+        if (t.defending) {
+          if (t.def.role === 'aew') pk *= 0.9;
+          else if (w.kind !== 'srm' && this.notching(t, m)) pk *= 0.45; // seeker loses the target in clutter
+          else pk *= 0.95 - 0.3 * (1 - energy);                         // drag + chaff: works on a tired missile
+        }
       } else pk *= 0.6;
+      m.pk = pk;
+      m.end = 'miss';
       if (this.rand() < pk) {
+        m.end = 'hit';
         this.fx.push({ kind: 'kill', x: t.x, y: t.y, t: this.t });
         if (t.kind === 'air') {
           this.score[m.side].kills++;
@@ -742,6 +804,10 @@
       return true;
     }
     cmdRTB(u) { this.orderRTB(u); }
+    // Manual defence: 'drag' (BREAK), 'notch', or null to hand back to automatic.
+    cmdDefend(u, mode) {
+      u.manualDef = mode ? { mode, until: this.t + 45 } : null;
+    }
 
     finish(reason) {
       if (this.over) return;

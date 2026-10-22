@@ -13,7 +13,7 @@
       { side: 'PK', callsign: 'BANDIT', type: 'J10C', count: 1, loadout: 'J10C', base: 'RAFIQUI', pos: P(30.6, 74.2), order: { type: 'orbit', ...P(30.6, 74.2), r: 15 } },
       { side: 'PK', callsign: 'SKYEYE', type: 'ERIEYE', count: 1, loadout: 'AEW', base: 'RAFIQUI', pos: P(30.9, 70.5), order: { type: 'orbit', ...P(30.9, 70.5), r: 20 } },
     ],
-    reserves: [], sams: [], radars: [],
+    emptyBases: true, noStatics: true,
   };
 
   // Put a unit at lat/lon, flying straight along hdgDeg (0 = north).
@@ -162,8 +162,8 @@
     T.phase = 'off';
     coach('TRAINING COMPLETE', `<p>You've seen the four ideas behind the game:</p>
       <p>· Long shots can be <b>outrun</b> (BREAK).<br>· Close shots can only be <b>spoiled</b> (NOTCH).<br>· Silent data-link shots give <b>no warning</b>.<br>· Your own radar-guided shots need <b>support</b> until PITBULL.</p>`, [
-      { label: 'COMMAND INDIA', pri: true, fn: () => { $('coach').classList.add('hidden'); document.body.classList.remove('training'); KC.app.start('IN'); } },
-      { label: 'COMMAND PAKISTAN', pri: true, fn: () => { $('coach').classList.add('hidden'); document.body.classList.remove('training'); KC.app.start('PK'); } },
+      { label: 'COMMAND INDIA', pri: true, fn: () => { $('coach').classList.add('hidden'); document.body.classList.remove('training'); KC.app.startNight(0, 'IN'); } },
+      { label: 'COMMAND PAKISTAN', pri: true, fn: () => { $('coach').classList.add('hidden'); document.body.classList.remove('training'); KC.app.startNight(0, 'PK'); } },
       { label: 'MAIN MENU', fn: quit },
     ]);
   }
@@ -215,7 +215,6 @@
     }
   }
 
-  $('menu-training').onclick = begin;
   function stop() { T.phase = 'off'; $('coach').classList.add('hidden'); }
   KC.training = { begin, tick, stop, LESSONS, goto: showIntro };
 })(globalThis.KC);

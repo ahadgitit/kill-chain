@@ -1,12 +1,24 @@
-// Simulation core: sensors, data-link picture, missiles, flight behaviour and AI.
+// Simulation core: bases and sorties, sensors, data-link picture, missiles, strikes,
+// drones, electronic warfare, escalation, claims and replay recording.
 // No DOM access here so it can be stepped headless (see tools/headless.js).
 (function (KC) {
-  const { AIRCRAFT, WEAPONS, SAMS, LOADOUTS, BASES, SITES, V_MIN, geo } = KC;
+  const { AIRCRAFT, WEAPONS, SAMS, PRESETS, STOCKS, AIR_CAP, BASES, SITES, SAM_SITES, RADAR_SITES, LOADOUTS, V_MIN, geo } = KC;
   const DEG = Math.PI / 180;
   const ENEMY = { IN: 'PK', PK: 'IN' };
   const SIDES = ['IN', 'PK'];
   const GIMBAL = 60 * DEG;
-  const AI_FIRE = 0.75; // fraction of max launch range used by automatic shots
+  const AI_FIRE = 0.75;          // fraction of max launch range used by automatic shots
+  const CLOSED_AT = 60;          // base damage at which the runway closes
+  const REPAIR_PER_MIN = 5;      // base damage repaired per minute
+  const EW = {
+    jam: { dur: 75, cd: 360, name: 'LINK JAM' },
+    barrage: { dur: 60, cd: 240, r: 120, name: 'BARRAGE JAM' },
+    decoy: { dur: 300, cd: 300, name: 'DECOYS' },
+  };
+  const CALLSIGN = {
+    RAFALE: 'VAJRA', SU30: 'SHAKTI', MIG29: 'BAAZ', M2000: 'TRISHUL', NETRA: 'NETRA', PHALCON: 'PHALCON', HAROP: 'HAROP',
+    J10C: 'COBRA', JF17B3: 'THUNDER', JF17B2: 'STORM', F16: 'FALCON', ERIEYE: 'SKYEYE', ZDK03: 'EAGLE', SWARM: 'SWARM',
+  };
 
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const angNorm = a => Math.atan2(Math.sin(a), Math.cos(a));
@@ -24,12 +36,14 @@
   }
 
   class Sim {
-    constructor(scn, player, seed) {
-      this.scn = scn;
+    // cfg: { name, start, duration, night?, carry?, flights?, emptyBases?, ai? }
+    constructor(cfg, player, seed) {
+      this.cfg = cfg;
+      this.night = cfg.night || null;
       this.player = player;           // 'IN', 'PK' or null (AI vs AI)
       this.rand = mulberry32(seed == null ? Date.now() : seed);
       this.t = 0;
-      this.duration = scn.duration;
+      this.duration = cfg.duration;
       this.nextId = 1;
       this.units = [];
       this.missiles = [];
@@ -40,47 +54,87 @@
       this.sweepTimer = 0;
       this.trackNo = { IN: 100, PK: 100 };
       this.tracks = { IN: new Map(), PK: new Map() };
+      this.callNo = {};
+      const carry = cfg.carry || null;
       this.score = {};
-      for (const s of SIDES) this.score[s] = { kills: 0, killValue: 0, lost: 0, hits: 0, intercepts: 0, shots: 0 };
-      this.bases = BASES.map(b => ({ ...b, kind: 'base' }));
-      this.sites = SITES.map(s => ({ ...s, kind: 'site', hits: 0 }));
+      for (const s of SIDES) {
+        this.score[s] = {
+          kills: 0, killValue: 0, lost: 0, shots: 0, intercepts: 0, droneKills: 0, groundKills: 0, groundKillValue: 0,
+          hits: 0, objHits: new Set(), otherHits: new Set(), claimed: 0, falseClaims: 0, groundLost: 0,
+        };
+      }
+      this.stocks = carry ? JSON.parse(JSON.stringify(carry.stocks)) : JSON.parse(JSON.stringify(STOCKS));
+      this.bases = BASES.map(b => {
+        const base = { id: b.id, side: b.side, x: b.x, y: b.y, kind: 'base', home: b.type, pools: {}, preset: {}, damage: 0 };
+        const n = cfg.emptyBases ? 0 : carry && carry.pools[b.id] ? null : b.count;
+        if (b.type && n != null) base.pools[b.type] = { ready: n, rearm: [] };
+        if (carry && carry.pools[b.id]) for (const [ty, c] of Object.entries(carry.pools[b.id])) base.pools[ty] = { ready: c, rearm: [] };
+        for (const ty of Object.keys(base.pools)) base.preset[ty] = b.type === ty && b.preset ? b.preset : Object.keys(PRESETS[ty])[0];
+        if (carry && carry.damage[b.id]) base.damage = carry.damage[b.id];
+        return base;
+      });
+      this.sites = this.night && this.night.sites ? SITES.map(s => ({ ...s, kind: 'site', hits: 0 })) : [];
+      const deadStatics = new Set(carry ? carry.deadStatics : []);
+      if (!cfg.noStatics) {
+        for (const d of SAM_SITES) this.addStatic('sam', d, deadStatics.has(d.callsign));
+        for (const d of RADAR_SITES) this.addStatic('radar', d, deadStatics.has(d.callsign));
+      }
+      for (const d of cfg.flights || []) this.addFlight(d);
 
-      for (const d of scn.flights) this.addFlight(d, true);
-      for (const d of scn.reserves) this.addFlight(d, false);
-      for (const d of scn.sams) this.addStatic('sam', d);
-      for (const d of scn.radars) this.addStatic('radar', d);
+      this.objectives = { IN: [], PK: [] };
+      if (this.night) {
+        for (const s of SIDES) {
+          this.objectives[s] = this.night.targets[s].map(o => ({ ...o, ref: this.refFor(o.kind, o.id), hit: false }));
+        }
+      }
+      this.esc = carry ? Math.round(carry.esc * 0.6) : 10;
+      this.escMarks = new Set();
+      this.ew = {};
+      for (const s of SIDES) this.ew[s] = { jam: { until: 0, ready: 0 }, barrage: { until: 0, ready: 0, x: 0, y: 0 }, decoy: { until: 0, ready: 0 } };
+      this.aewClear = { IN: 0, PK: 0 };
+      this.prompts = [];
+      this.promptCd = {};
+      this.replay = [];
+      this.replayTimer = 0;
+      // Intelligence: fixed SAM and radar sites are known to the other side before the war.
+      for (const u of this.units) if (u.kind === 'sam' || u.kind === 'radar') this.updateTrack(ENEMY[u.side], u, 'esm');
+      this.commanders = [];
+      if (this.night && KC.Commander && cfg.ai !== false) {
+        for (const s of SIDES) if (s !== player) this.commanders.push(new KC.Commander(this, s, this.night.ai[s]));
+      }
       this.sweep();
-      this.log('ALL', `${scn.name}: simulation started`, 'info');
+      this.log('ALL', `${cfg.name}: simulation started`, 'info');
     }
 
     // ---------- setup ----------
-    addFlight(d, airborne) {
+    addFlight(d) {
       const def = AIRCRAFT[d.type];
-      const base = this.base(d.base);
+      const u = this.newFlight(d.side, d.type, d.count, d.base, d.callsign);
+      Object.assign(u, { x: d.pos.x, y: d.pos.y, wpn: { ...LOADOUTS[d.loadout] }, loadoutKey: d.loadout, order: this.cloneOrder(d.order) });
+      u.fuel = def.fuel;
+      return u;
+    }
+    newFlight(side, type, count, baseId, callsign) {
+      const def = AIRCRAFT[type];
+      const base = this.base(baseId);
+      const pre = CALLSIGN[type] || type;
+      this.callNo[pre] = (this.callNo[pre] || 0) + 1;
       const u = {
-        id: this.nextId++, kind: 'air', side: d.side, callsign: d.callsign, type: d.type, def,
-        count: d.count, loadoutKey: d.loadout, wpn: { ...LOADOUTS[d.loadout] }, base: d.base,
-        x: airborne ? d.pos.x : base.x, y: airborne ? d.pos.y : base.y,
-        hdg: d.side === 'IN' ? -90 * DEG : 90 * DEG, spd: def.speed,
-        state: airborne ? 'air' : 'ground', readyAt: 0,
-        order: airborne ? this.cloneOrder(d.order) : null,
-        roe: 'free', radarOn: def.role === 'aew' || !def.linked,
-        fuel: def.role === 'aew' ? 20000 : 6500, lastShot: -99, lastLaunch: -99,
-        threats: [], defending: false, seen: {}, ai: d.side !== this.player,
-        engage: null, anchor: null, cap: null, bingo: false,
+        id: this.nextId++, kind: 'air', side, callsign: callsign || `${pre}-${this.callNo[pre]}`, type, def,
+        count, wpn: {}, base: baseId, x: base.x, y: base.y,
+        hdg: side === 'IN' ? -90 * DEG : 90 * DEG, spd: def.speed, state: 'air', order: null,
+        roe: 'free', radarOn: def.role === 'aew' || (def.role === 'fighter' && !def.linked),
+        fuel: def.fuel, lastShot: -99, lastLaunch: -99, launchedAt: this.t,
+        threats: [], defending: false, seen: {}, ai: side !== this.player,
+        engage: null, anchor: null, cap: null, bingo: false, crossed: false,
       };
-      if (u.order && u.order.type === 'orbit') u.cap = { x: u.order.x, y: u.order.y, r: u.order.r };
-      if (u.order && u.order.type === 'strike') {
-        const s = this.site(u.order.list[0].site);
-        u.hdg = bearing(u, s);
-      }
       this.units.push(u);
       return u;
     }
-    addStatic(kind, d) {
+    addStatic(kind, d, dead) {
       const u = {
         id: this.nextId++, kind, side: d.side, callsign: d.callsign, type: d.type,
-        x: d.pos.x, y: d.pos.y, hdg: 0, spd: 0, linked: true, seen: {}, lastShot: -99,
+        x: d.pos.x, y: d.pos.y, hdg: 0, spd: 0, linked: true, seen: {}, lastShot: -99, dead: !!dead, radarOn: true,
       };
       if (kind === 'sam') { u.def = SAMS[d.type]; u.ammo = u.def.ammo; u.range = u.def.radar; }
       else { u.range = d.range; u.def = { name: 'Ground radar' }; }
@@ -95,13 +149,20 @@
     base(id) { return this.bases.find(b => b.id === id); }
     site(id) { return this.sites.find(s => s.id === id); }
     unit(id) { return this.units.find(u => u.id === id); }
+    staticBy(callsign) { return this.units.find(u => (u.kind === 'sam' || u.kind === 'radar') && u.callsign === callsign); }
+    refFor(kind, id) {
+      if (kind === 'site') return this.site(id);
+      if (kind === 'base') return this.base(id);
+      return this.staticBy(id);
+    }
+    targetId(ref) { return ref.kind === 'sam' || ref.kind === 'radar' ? ref.callsign : ref.id; }
 
     log(side, text, cls, extra) {
       this.events.push({ n: ++this.evSeq, t: this.t, side, text, cls: cls || 'info', ...extra });
-      if (this.events.length > 400) this.events.shift();
+      if (this.events.length > 500) this.events.shift();
     }
     clock(t) {
-      const s = this.scn.start;
+      const s = this.cfg.start;
       const tot = s.h * 3600 + s.m * 60 + Math.floor(t == null ? this.t : t);
       const h = Math.floor(tot / 3600) % 24, m = Math.floor(tot / 60) % 60, sec = tot % 60;
       return `${String(h).padStart(2, '0')}${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}Z`;
@@ -112,16 +173,17 @@
       if (!e) return false;
       if (e.kind === 'air') return e.state === 'air';
       if (e.kind === 'cruise') return !e.dead;
+      if (e.kind === 'sam' || e.kind === 'radar') return !e.dead;
       return true;
     }
     isLinked(u) { return u.kind !== 'air' || u.def.linked; }
     emitting(u) {
-      if (u.kind === 'air') return u.state === 'air' && (u.radarOn || u.def.role === 'aew');
-      return u.kind === 'sam' || u.kind === 'radar';
+      if (u.kind === 'air') return u.state === 'air' && !u.ghost && (u.radarOn || u.def.role === 'aew');
+      return (u.kind === 'sam' || u.kind === 'radar') && !u.dead && u.radarOn;
     }
     sensorRange(u) {
       if (u.kind === 'air') return this.emitting(u) ? u.def.radar : 0;
-      return u.range;
+      return this.emitting(u) ? u.range : 0;
     }
     targetsOf(side) {
       const out = [];
@@ -129,13 +191,24 @@
       for (const m of this.missiles) if (m.side === side && m.kind === 'cruise' && !m.dead) out.push(m);
       return out;
     }
+    isDrone(e) { return e.kind === 'air' && e.def.role === 'drone'; }
+    manned(e) { return e.kind === 'air' && !e.ghost && e.def.role !== 'drone'; }
+    airborne(side) {
+      let n = 0;
+      for (const u of this.units) if (u.side === side && u.state === 'air' && this.manned(u)) n += u.count;
+      return n;
+    }
+    baseOpen(b) { return b.damage < CLOSED_AT; }
     detects(s, t) {
-      const R0 = this.sensorRange(s);
+      let R0 = this.sensorRange(s);
       if (!R0) return false;
       const rcs = t.kind === 'air' ? t.def.rcs : t.w.rcs;
+      const low = t.kind === 'cruise' ? t.w.low : !!t.def.low;
       let f = Math.pow(rcs / 5, 0.25);
-      if (t.kind === 'cruise' && t.w.low) f *= s.kind === 'air' ? (s.def.role === 'aew' ? 0.7 : 0.55) : 0.35;
+      if (low) f *= s.kind === 'air' ? (s.def.role === 'aew' ? 0.7 : 0.55) : 0.35;
       if (t.kind === 'air') f *= 1 - t.def.ew * 0.3;
+      const bj = this.ew[t.side].barrage;
+      if (bj.until > this.t && Math.hypot(t.x - bj.x, t.y - bj.y) < EW.barrage.r) f *= 0.55;
       const d = dist(s, t);
       if (d > R0 * f) return false;
       if (s.kind === 'air' && s.def.role === 'fighter') {
@@ -239,45 +312,56 @@
       return this.ownTrack(u, t) || (w.tp && this.isLinked(u) && t.seen[u.side] && t.seen[u.side].net);
     }
     strikeWeapon(u) {
-      for (const k in u.wpn) if (u.wpn[k] && WEAPONS[k].kind === 'cruise') return k;
-      return null;
+      let best = null;
+      for (const k in u.wpn) if (u.wpn[k] && WEAPONS[k].kind === 'cruise' && (!best || WEAPONS[k].range > WEAPONS[best].range)) best = k;
+      return best;
     }
     hasAEW(side) {
       return this.units.some(u => u.side === side && u.kind === 'air' && u.state === 'air' && u.def.role === 'aew');
     }
     trackFor(side, e) { return this.tracks[side].get(e.id); }
+    nearestOpenBase(side, p, type) {
+      let best = null, bd = Infinity;
+      for (const b of this.bases) {
+        if (b.side !== side || !this.baseOpen(b)) continue;
+        const d = dist(b, p) * (type && b.home === type ? 0.7 : 1);
+        if (d < bd) { bd = d; best = b; }
+      }
+      return best;
+    }
 
     // ---------- sensors & picture ----------
     sweep() {
-      const statics = this.units.filter(u => u.kind === 'sam' || u.kind === 'radar');
       for (const side of SIDES) {
         const enemy = ENEMY[side];
-        const sensors = this.units.filter(u => u.side === side && (u.kind !== 'air' || (u.state === 'air' && this.emitting(u))));
+        const jammed = this.ew[enemy].jam.until > this.t;   // our data link is being jammed
+        const sensors = this.units.filter(u => u.side === side && this.emitting(u));
         const table = this.tracks[side];
         for (const t of this.targetsOf(enemy)) {
           const by = [];
           let net = false;
           for (const s of sensors) {
-            if (this.detects(s, t)) { by.push(s.id); if (this.isLinked(s)) net = true; }
+            if (this.detects(s, t)) { by.push(s.id); if (this.isLinked(s) && !jammed) net = true; }
           }
           t.seen[side] = { any: by.length > 0, net, by };
           if (by.length) this.updateTrack(side, t, 'radar');
         }
         // Passive detection (RWR / ESM) of enemy emitters.
-        const listeners = this.units.filter(u => u.side === side && (u.kind !== 'air' || u.state === 'air'));
+        const listeners = this.units.filter(u => u.side === side && (u.kind === 'air' ? u.state === 'air' : !u.dead));
         for (const e of this.units) {
           if (e.side !== enemy || !this.emitting(e)) continue;
           const tr = table.get(e.id);
           if (tr && tr.q === 'radar' && this.t - tr.t < 2) continue;
+          if (tr && tr.static) continue;
           const R = Math.min(450, this.sensorRange(e) * 1.25);
           if (listeners.some(l => dist(l, e) <= R)) this.updateTrack(side, e, 'esm');
         }
         for (const [id, tr] of table) {
-          if (tr.static) continue;
+          if (tr.static) { if (tr.ref.dead && tr.bda) table.delete(id); continue; }
           if (!this.isAlive(tr.ref) || this.t - tr.t > 45) table.delete(id);
         }
       }
-      void statics;
+      this.checkBaseThreats();
     }
     updateTrack(side, e, q) {
       const table = this.tracks[side];
@@ -285,12 +369,12 @@
       if (!tr) {
         tr = { id: e.id, ref: e, num: ++this.trackNo[side], first: this.t, kind: e.kind, static: e.kind === 'sam' || e.kind === 'radar' };
         table.set(e.id, tr);
-        if (e.kind === 'air' && side === this.player) {
+        if (e.kind === 'air' && side === this.player && !this.isDrone(e)) {
           this.log(side, `New track T${tr.num}: ${e.def.name}${e.count > 1 ? ' x' + e.count : ''} (${q === 'esm' ? 'passive' : 'radar'})`, 'info');
         }
       }
       if (q === 'esm' && tr.q === 'radar' && this.t - tr.t < 2) return;
-      const err = q === 'esm' ? 6 : 0;
+      const err = q === 'esm' && !tr.static ? 6 : 0;
       tr.q = q;
       tr.t = this.t;
       tr.x = e.x + (this.rand() - 0.5) * err;
@@ -298,6 +382,7 @@
       const v = vel(e);
       tr.vx = q === 'esm' ? 0 : v.x;
       tr.vy = q === 'esm' ? 0 : v.y;
+      tr.count = e.count;
     }
     trackPos(tr) {
       const dt = Math.min(60, this.t - tr.t);
@@ -319,29 +404,170 @@
       this.t += dt;
       this.sweepTimer -= dt;
       if (this.sweepTimer <= 0) { this.sweep(); this.sweepTimer = 1; }
+      for (const c of this.commanders) c.tick(dt);
+      for (const b of this.bases) this.updateBase(b, dt);
       for (const u of this.units) {
-        if (u.kind === 'air') {
-          if (u.state === 'air') this.updateFlight(u, dt);
-          else if (u.state === 'ground' && u.readyAt && this.t >= u.readyAt) {
-            u.readyAt = 0;
-            this.log(u.side, `${u.callsign} re-armed and ready at ${u.base}`, 'info');
-          }
-        } else if (u.kind === 'sam') this.updateSam(u);
+        if (u.kind === 'air') { if (u.state === 'air') this.updateFlight(u, dt); }
+        else if (u.kind === 'sam' && !u.dead) this.updateSam(u);
       }
       for (const m of this.missiles) {
         if (m.kind === 'cruise') this.updateCruise(m, dt); else this.updateMissile(m, dt);
       }
       this.missiles = this.missiles.filter(m => !m.dead);
+      if (this.units.length > 400) this.units = this.units.filter(u => u.kind !== 'air' || u.state === 'air');
       this.fx = this.fx.filter(f => this.t - f.t < 12);
-      if (this.t >= this.duration) this.finish('Time limit reached');
+      this.pointDefence(dt);
+      this.esc = Math.max(0, this.esc - dt * 0.5 / 60);
+      this.prompts = this.prompts.filter(p => !p.done);
+      this.replayTimer -= dt;
+      if (this.replayTimer <= 0) { this.record(); this.replayTimer = 3; }
+      if (this.night && this.night.ceasefireAt && this.t >= this.night.ceasefireAt) this.finish('CEASEFIRE: hostilities end');
+      if (this.t >= this.duration) this.finish('Night over');
+    }
+
+    // ---------- bases & sorties ----------
+    updateBase(b, dt) {
+      if (b.damage > 0) {
+        const wasClosed = !this.baseOpen(b);
+        b.damage = Math.max(0, b.damage - dt * REPAIR_PER_MIN / 60);
+        if (wasClosed && this.baseOpen(b)) this.log(b.side, `${b.id}: runway repaired, base operational`, 'good');
+      }
+      for (const [ty, p] of Object.entries(b.pools)) {
+        if (!p.rearm.length) continue;
+        const done = p.rearm.filter(tt => tt <= this.t).length;
+        if (done) {
+          p.rearm = p.rearm.filter(tt => tt > this.t);
+          p.ready += done;
+          if (b.side === this.player) this.log(b.side, `${b.id}: ${done} ${AIRCRAFT[ty].name} refuelled and re-armed`, 'info');
+        }
+      }
+    }
+    // Weapons one jet of this type would take off with from base b, given stocks.
+    loadoutFor(b, type, preset) {
+      const per = PRESETS[type][preset || b.preset[type]] || {};
+      return per;
+    }
+    // Launch n aircraft of a type from a base. Returns the new flight or an error string.
+    launchFlight(baseId, type, n, opts) {
+      opts = opts || {};
+      const b = this.base(baseId);
+      const def = AIRCRAFT[type];
+      const p = b && b.pools[type];
+      if (!p) return 'No aircraft of that type here';
+      if (!this.baseOpen(b)) return `${b.id} runway is closed`;
+      n = Math.min(n, p.ready);
+      if (n <= 0) return 'No aircraft ready';
+      if (def.role !== 'drone') {
+        const room = AIR_CAP[b.side] - this.airborne(b.side);
+        if (room <= 0) return `Airborne limit reached (${AIR_CAP[b.side]})`;
+        n = Math.min(n, room);
+      }
+      const preset = opts.preset || b.preset[type];
+      const per = PRESETS[type][preset] || {};
+      const stock = this.stocks[b.side];
+      const wpn = {};
+      for (const [k, c] of Object.entries(per)) {
+        const take = Math.min(c * n, stock[k] == null ? c * n : stock[k]);
+        if (stock[k] != null) stock[k] -= take;
+        if (take > 0) wpn[k] = take;
+      }
+      p.ready -= n;
+      const u = this.newFlight(b.side, type, n, b.id);
+      u.wpn = wpn;
+      u.preset = preset;
+      u.ai = opts.ai != null ? opts.ai : b.side !== this.player;
+      const order = opts.order || this.defaultOrbit(b);
+      u.order = this.cloneOrder(order);
+      const aim = order.x != null ? order : this.orderPoint(u) || b;
+      u.hdg = bearing(b, aim) || u.hdg;
+      if (u.ai && u.order.type === 'orbit') u.cap = { x: u.order.x, y: u.order.y, r: u.order.r || 15 };
+      if (u.order.type === 'strike' || u.order.type === 'drone') u.strikeSince = this.t;
+      if (b.side === this.player) this.log(b.side, `${u.callsign}: ${n} ${def.name} airborne from ${b.id}`, 'info');
+      return u;
+    }
+    defaultOrbit(b) {
+      // Hold 25 km off the base, toward the frontier.
+      const h = b.side === 'IN' ? -90 * DEG : 90 * DEG;
+      return { type: 'orbit', x: b.x + Math.sin(h) * 25, y: b.y - Math.cos(h) * 25, r: 12 };
+    }
+    orderPoint(u) {
+      const o = u.order;
+      if (!o) return null;
+      if (o.x != null) return o;
+      if ((o.type === 'strike' || o.type === 'drone') && o.list && o.list.length) return this.refFor(o.list[0].kind, o.list[0].id);
+      return null;
+    }
+    land(u, b) {
+      u.state = 'landed';
+      u.threats = []; u.defending = false;
+      const p = b.pools[u.type] || (b.pools[u.type] = { ready: 0, rearm: [] });
+      if (!b.preset[u.type]) b.preset[u.type] = Object.keys(PRESETS[u.type])[0];
+      const turn = u.def.turnaround * (1 + b.damage / 100);
+      for (let i = 0; i < u.count; i++) p.rearm.push(this.t + turn);
+      const stock = this.stocks[u.side];
+      for (const [k, c] of Object.entries(u.wpn)) if (stock[k] != null) stock[k] += c;
+      if (u.side === this.player) this.log(u.side, `${u.callsign} landed at ${b.id}: refuel and re-arm ${Math.round(turn / 60)} min`, 'info');
+    }
+    // Damage to a base from a weapon or drone hit: runway damage plus aircraft on the ground.
+    hitBase(b, dmg, attacker, killChance, esc) {
+      const wasOpen = this.baseOpen(b);
+      b.damage = Math.min(100, b.damage + dmg);
+      let killed = 0;
+      for (const [ty, p] of Object.entries(b.pools)) {
+        const onGround = p.ready + p.rearm.length;
+        for (let i = 0; i < Math.min(onGround, 4); i++) {
+          if (this.rand() >= killChance) continue;
+          if (p.ready > 0) p.ready--; else if (p.rearm.length) p.rearm.pop(); else break;
+          killed++;
+          this.score[attacker].groundKills++;
+          this.score[attacker].groundKillValue += AIRCRAFT[ty].value;
+          this.score[b.side].groundLost++;
+        }
+      }
+      if (killed) this.log(b.side, `${b.id}: ${killed} aircraft destroyed on the ground`, 'loss');
+      if (wasOpen && !this.baseOpen(b)) {
+        this.log('ALL', `${b.id}: RUNWAY CLOSED (damage ${Math.round(b.damage)}%)`, 'impact');
+        for (const u of this.units) {
+          if (u.state === 'air' && u.side === b.side && u.order && u.order.type === 'rtb' && u.order.base === b.id) this.orderRTB(u);
+        }
+      }
+      this.addEsc((esc == null ? 4 : esc) + killed, 'base attack');
+      return killed;
+    }
+    // Static targets (SAM sites and radars).
+    hitStatic(s, chance, attacker) {
+      if (s.dead) return false;
+      if (this.rand() < chance) {
+        s.dead = true;
+        this.fx.push({ kind: 'kill', x: s.x, y: s.y, t: this.t });
+        this.log(s.side, `${s.callsign} DESTROYED`, 'loss');
+        this.addEsc(2, 'air defences hit');
+        return true;
+      }
+      this.log(s.side, `${s.callsign} hit but still operational`, 'warn');
+      return false;
+    }
+    // Shared bookkeeping when a weapon lands on a target.
+    targetHit(attacker, ref, destroyed) {
+      const id = this.targetId(ref);
+      const obj = this.objectives[attacker].find(o => o.ref === ref);
+      if (obj && (ref.kind === 'site' || ref.kind === 'base' || destroyed)) {
+        if (!obj.hit) this.log('ALL', `PRIORITY TARGET ${id} HIT`, 'impact');
+        obj.hit = true;
+        this.score[attacker].objHits.add(id);
+      } else if (ref.kind === 'base' || destroyed) this.score[attacker].otherHits.add(id);
+      this.score[attacker].hits++;
     }
 
     // ---------- flights ----------
     updateFlight(u, dt) {
       const def = u.def;
+      if (u.ghost) { this.updateGhost(u, dt); return; }
+      if (def.role === 'drone') { this.updateDrone(u, dt); return; }
       // Threat assessment.
       u.threats = u.threats.filter(m => !m.dead && m.target === u);
-      const pressing = u.threats.filter(m => m.lock || (m.warned && dist(m, u) < 40));
+      const holding = u.holdUntil > this.t;
+      const pressing = holding ? [] : u.threats.filter(m => m.lock || (m.warned && dist(m, u) < 40));
       if (u.manualDef && this.t > u.manualDef.until) u.manualDef = null;
       u.defending = pressing.length > 0 || !!u.manualDef;
       const near = u.threats.length ? u.threats.reduce((a, b) => (dist(a, u) < dist(b, u) ? a : b)) : null;
@@ -350,14 +576,24 @@
       // Fuel.
       u.fuel -= dt * (u.spd > def.speed * 1.1 ? 2.5 : 1);
       if (!u.bingo && u.order && u.order.type !== 'rtb') {
-        const b = this.base(u.base);
-        if (u.fuel < dist(u, b) / def.speed + 900) {
+        const b = this.nearestOpenBase(u.side, u, u.type) || this.base(u.base);
+        if (u.fuel < dist(u, b) / def.speed + 600) {
           u.bingo = true;
-          this.log(u.side, `${u.callsign} BINGO fuel, returning to ${u.base}`, 'warn');
-          this.orderRTB(u);
+          const engaged = u.engage || (u.order && u.order.type === 'attack');
+          if (!u.ai && engaged && this.promptFor('bingo', u)) {
+            // the player decides (see answer())
+          } else {
+            this.log(u.side, `${u.callsign} BINGO fuel, returning to base`, 'warn');
+            this.orderRTB(u);
+          }
         }
       }
       if (u.fuel <= 0) { this.lose(u, u.count, 'ran out of fuel'); return; }
+      if (!u.crossed && geo.sideOf(u.x, u.y) !== u.side) {
+        u.crossed = true;
+        this.addEsc(2, 'airspace violation');
+        this.log(u.side, `${u.callsign} crossed into enemy airspace`, 'warn');
+      }
 
       if (u.ai) this.aiThink(u);
       else if (u.order && u.order.type === 'attack' && !this.fireQuality(u, u.order.target) && !u.radarOn &&
@@ -385,14 +621,15 @@
         want = r.hdg; spd = r.spd;
       }
       if (u.state !== 'air') return; // landed during steer
-
-      const maxTurn = def.turn * DEG * dt * (u.defending ? 1.3 : 1);
+      this.move(u, want, spd, dt, u.defending ? 1.3 : 1);
+      if (!u.defending && u.roe === 'free' && def.role === 'fighter') this.autoEngage(u);
+    }
+    move(u, want, spd, dt, turnMul) {
+      const maxTurn = u.def.turn * DEG * dt * (turnMul || 1);
       u.hdg = angNorm(u.hdg + clamp(angNorm(want - u.hdg), -maxTurn, maxTurn));
       u.spd += clamp(spd - u.spd, -0.01 * dt, 0.01 * dt);
       u.x += Math.sin(u.hdg) * u.spd * dt;
       u.y -= Math.cos(u.hdg) * u.spd * dt;
-
-      if (!u.defending && u.roe === 'free' && def.role === 'fighter') this.autoEngage(u);
     }
 
     steer(u) {
@@ -402,7 +639,13 @@
       if (!o) return this.orbitAt(u, { x: u.x, y: u.y, r: 15 });
       if (o.type === 'orbit') return this.orbitAt(u, o);
       if (o.type === 'rtb') {
-        const b = this.base(u.base);
+        let b = this.base(o.base);
+        if (!b || !this.baseOpen(b)) {
+          b = this.nearestOpenBase(u.side, u, u.type);
+          if (!b) return this.orbitAt(u, { x: u.x, y: u.y, r: 15 });
+          if (o.base && o.base !== b.id) this.log(u.side, `${u.callsign} diverting to ${b.id}`, 'warn');
+          o.base = b.id;
+        }
         if (dist(u, b) < 6) { this.land(u, b); return { hdg: u.hdg, spd: 0 }; }
         return { hdg: bearing(u, b), spd: def.speed };
       }
@@ -417,9 +660,9 @@
       else h = bearing(p, u) + 90 * DEG + clamp((d - r) / r, -1, 1) * 40 * DEG;
       return { hdg: this.leash(u, h), spd: u.def.speed };
     }
-    // AI flights stay inside their own airspace (no deliberate border crossing).
+    // AI fighters stay inside their own airspace (no deliberate border crossing).
     leash(u, h) {
-      if (!u.ai) return h;
+      if (!u.ai || u.def.role === 'drone') return h;
       const ok = hh => {
         const x = u.x + Math.sin(hh) * 25, y = u.y - Math.cos(hh) * 25;
         return geo.sideOf(x, y) === u.side && geo.frontierDist(x, y) > 10;
@@ -464,70 +707,175 @@
     }
     steerStrike(u, o) {
       const def = u.def;
+      while (o.list.length) {
+        const r = this.refFor(o.list[0].kind, o.list[0].id);
+        if (r && this.isAlive(r)) break;
+        o.list.shift();
+      }
       if (!o.list.length) { this.strikeDone(u); return { hdg: u.hdg, spd: def.speed }; }
       const job = o.list[0];
-      const site = this.site(job.site);
+      const ref = this.refFor(job.kind, job.id);
       const wk = this.strikeWeapon(u);
       if (!wk) { o.list.length = 0; this.strikeDone(u); return { hdg: u.hdg, spd: def.speed }; }
       const w = WEAPONS[wk];
-      const d = dist(u, site);
+      const d = dist(u, ref);
       if (d <= w.range * 0.9) {
         if (this.t - u.lastLaunch > 2) {
-          this.launchCruise(u, wk, site);
+          this.launchCruise(u, wk, ref);
           u.lastLaunch = this.t;
           job.n--;
           if (job.n <= 0 || !u.wpn[wk]) o.list.shift();
           if (!o.list.length) this.strikeDone(u);
         }
-        return { hdg: bearing(u, site), spd: def.speed };
+        return { hdg: bearing(u, ref), spd: def.speed };
       }
-      return { hdg: bearing(u, site), spd: def.speed };
+      // AI strike packages give up if they can't reach a launch point in time.
+      if (u.ai && this.t - (u.strikeSince || 0) > 1200) { this.log(u.side, `${u.callsign} strike aborted`, 'info'); this.orderRTB(u); }
+      return { hdg: this.leash(u, bearing(u, ref)), spd: def.speed };
     }
     strikeDone(u) {
       this.log(u.side, `${u.callsign} weapons released, egressing`, 'info');
-      if (u.ai) this.orderRTB(u);
+      if (u.ai || !this.hasAAM(u)) this.orderRTB(u);
       else u.order = { type: 'orbit', x: u.x + Math.sin(u.hdg + Math.PI) * 40, y: u.y - Math.cos(u.hdg + Math.PI) * 40, r: 15 };
     }
-    orderRTB(u) {
-      u.order = { type: 'rtb' };
+    orderRTB(u, baseId) {
+      const b = baseId ? this.base(baseId) : (this.baseOpen(this.base(u.base)) ? this.base(u.base) : this.nearestOpenBase(u.side, u, u.type));
+      u.order = { type: 'rtb', base: b ? b.id : u.base };
       u.engage = null;
     }
-    land(u, b) {
-      u.state = 'ground';
-      u.x = b.x; u.y = b.y;
-      u.readyAt = this.t + 600;
-      u.order = null; u.engage = null; u.threats = []; u.defending = false;
-      u.wpn = { ...LOADOUTS[u.loadoutKey] };
-      u.fuel = u.def.role === 'aew' ? 20000 : 9000;
-      u.bingo = false;
-      this.log(u.side, `${u.callsign} landed at ${b.id}, re-arming`, 'info');
-      if (u.ai && u.cap) this.aiReplace(u);
+
+    // ---------- drones ----------
+    updateDrone(u, dt) {
+      const def = u.def, o = u.order || { type: 'orbit', x: u.x, y: u.y, r: 15 };
+      u.fuel -= dt;
+      if (u.fuel <= 0) { u.state = 'expended'; this.log(u.side, `${u.callsign}: drones out of fuel`, 'info'); return; }
+      let aim = null, hit = null;
+      if (o.type === 'drone' && o.list && o.list.length) {
+        while (o.list.length && !this.isAlive(this.refFor(o.list[0].kind, o.list[0].id))) o.list.shift();
+        if (o.list.length) { aim = this.refFor(o.list[0].kind, o.list[0].id); hit = aim; }
+      } else if (o.type === 'sead' || (o.type === 'orbit' && def.mission === 'sead')) {
+        // Anti-radiation seeker: home on the nearest enemy emitter within 45 km.
+        let best = null, bd = 45;
+        for (const e of this.units) {
+          if (e.side === u.side || (e.kind !== 'sam' && e.kind !== 'radar') || !this.emitting(e)) continue;
+          const d = dist(u, e);
+          if (d < bd) { bd = d; best = e; }
+        }
+        if (best) { aim = best; hit = best; }
+      }
+      let want;
+      if (aim) want = bearing(u, aim);
+      else want = this.orbitAt(u, o.x != null ? o : { x: u.x, y: u.y, r: 20 }).hdg;
+      this.move(u, want, aim ? def.dash : def.speed, dt);
+      if (hit && dist(u, hit) < 1.5) this.droneImpact(u, hit, o);
+    }
+    droneImpact(u, ref, o) {
+      const attackMode = o.type === 'drone';
+      const n = attackMode ? Math.max(1, Math.ceil(u.count / Math.max(1, o.list.length))) : 1;
+      let hits = 0;
+      for (let i = 0; i < n && u.count > 0; i++) {
+        u.count--;
+        if (this.rand() > 0.7) continue;
+        hits++;
+        if (ref.kind === 'base') this.hitBase(ref, 10, u.side, 0.1, 0);
+        else if (ref.kind === 'site') ref.hits++;
+      }
+      this.fx.push({ kind: 'impact', x: ref.x, y: ref.y, t: this.t });
+      let destroyed = false;
+      if ((ref.kind === 'sam' || ref.kind === 'radar') && hits) destroyed = this.hitStatic(ref, Math.min(0.9, 0.55 * hits), u.side);
+      if (hits) {
+        this.targetHit(u.side, ref, destroyed);
+        this.log('ALL', `DRONE STRIKE: ${hits} hit${hits > 1 ? 's' : ''} on ${this.targetId(ref)}`, 'impact');
+        this.addEsc(1, 'drone strike');
+      }
+      if (attackMode) o.list.shift();
+      if (u.count <= 0) u.state = 'expended';
+      else if (attackMode && !o.list.length) u.order = { type: 'orbit', x: u.x, y: u.y, r: 15 };
+    }
+    // Guns and short-range defences around bases and SAM sites shoot at drones nearby.
+    pointDefence(dt) {
+      for (const u of this.units) {
+        if (u.state !== 'air' || !this.isDrone(u)) continue;
+        const near = this.bases.some(b => b.side !== u.side && dist(b, u) < 6) ||
+          this.units.some(s => s.kind === 'sam' && !s.dead && s.side !== u.side && dist(s, u) < 6);
+        if (near && this.rand() < 0.05 * dt) {
+          u.count--;
+          this.score[ENEMY[u.side]].droneKills++;
+          this.fx.push({ kind: 'miss', x: u.x, y: u.y, t: this.t });
+          if (u.count <= 0) u.state = 'dead';
+        }
+      }
     }
 
+    // ---------- electronic warfare ----------
+    ewReady(side, kind) { return this.ew[side][kind].ready <= this.t; }
+    cmdEW(side, kind, x, y) {
+      const e = this.ew[side][kind];
+      if (e.ready > this.t) return false;
+      e.until = this.t + EW[kind].dur;
+      e.ready = this.t + EW[kind].cd;
+      if (kind === 'barrage') { e.x = x; e.y = y; }
+      if (kind === 'decoy') this.spawnDecoys(side, x, y);
+      this.log(side, kind === 'jam' ? 'LINK JAM: enemy data link degraded for 75 s'
+        : kind === 'barrage' ? 'BARRAGE JAM: enemy radars degraded in the area for 60 s'
+          : 'DECOYS launched: fake fighter tracks heading for the target area', 'shot');
+      if (kind === 'jam') this.log(ENEMY[side], 'Data link jammed! Fighters must use their own radar to shoot', 'warn');
+      return true;
+    }
+    spawnDecoys(side, x, y) {
+      const type = side === 'IN' ? 'RAFALE' : 'J10C';
+      const fr = this.units.filter(u => u.side === side && u.state === 'air' && this.manned(u));
+      const from = fr.length ? fr.reduce((a, b) => (dist(a, { x, y }) < dist(b, { x, y }) ? a : b))
+        : this.nearestOpenBase(side, { x, y }) || this.bases.find(b => b.side === side);
+      for (let i = 0; i < 2; i++) {
+        const u = this.newFlight(side, type, 2, this.bases.find(b => b.side === side).id, `DECOY-${i + 1}`);
+        u.ghost = true; u.ai = true; u.radarOn = false;
+        u.x = from.x + (i ? 6 : -6); u.y = from.y + (i ? 4 : -4);
+        u.order = { type: 'orbit', x: x + (i ? 15 : -15), y, r: 15 };
+        u.hdg = bearing(u, u.order);
+        u.fuel = EW.decoy.dur;
+      }
+    }
+    updateGhost(u, dt) {
+      u.fuel -= dt;
+      if (u.fuel <= 0) { u.state = 'expended'; return; }
+      const r = this.orbitAt(u, u.order);
+      this.move(u, r.hdg, u.def.speed, dt);
+    }
+
+    // ---------- shooting ----------
     autoEngage(u) {
       if (this.t - u.lastShot < 3) return;
       const enemies = this.targetsOf(ENEMY[u.side]);
       let best = null, bestScore = -1;
       for (const t of enemies) {
         if (!this.fireQuality(u, t)) continue;
-        if (t.kind === 'cruise' && u.order && u.order.type === 'strike') continue;
+        const cheap = t.kind === 'cruise' || this.isDrone(t);
+        if (cheap && u.order && u.order.type === 'strike') continue;
         const want = t.kind === 'air' ? t.count : 1;
-        if (this.inFlightAt(u.side, t) >= want) continue;
+        if (this.inFlightAt(u.side, t) >= Math.min(want, this.isDrone(t) ? 1 : want)) continue;
+        if (t.kind === 'air' && t.def.role === 'aew' && !this.aewCleared(u.side, t)) continue;
         const k = this.chooseWeapon(u, t, AI_FIRE);
         if (!k || !this.canGuide(u, t, k)) continue;
         const off = Math.abs(angNorm(bearing(u, t) - u.hdg));
         if (off > (WEAPONS[k].kind === 'srm' ? 90 : 60) * DEG) continue;
-        const prio = t.kind === 'cruise' ? 0.5 : t.def.role === 'aew' ? 3 : this.strikeWeapon(t) ? 2 : 1;
+        const prio = this.isDrone(t) ? 0.3 : t.kind === 'cruise' ? 0.5 : t.def.role === 'aew' ? 3 : this.strikeWeapon(t) ? 2 : 1;
         const sc = prio * 1000 - dist(u, t);
         if (sc > bestScore) { bestScore = sc; best = t; }
       }
       if (best) this.tryFire(u, best, AI_FIRE);
     }
+    // The AI always has clearance to shoot at AEW&C; the player is asked first.
+    aewCleared(side, t) {
+      if (side !== this.player || this.aewClear[side] > this.t) return true;
+      this.promptFor('aew', t);
+      return false;
+    }
 
     tryFire(u, t, factor) {
       if (this.t - u.lastShot < 3) return false;
       if (!this.fireQuality(u, t)) return false;
-      const want = t.kind === 'air' ? (t.def.role === 'aew' ? 2 : t.count) : 1;
+      const want = t.kind === 'air' ? (t.def.role === 'aew' ? 2 : this.isDrone(t) ? 1 : t.count) : 1;
       if (this.inFlightAt(u.side, t) >= want) return false;
       const k = this.chooseWeapon(u, t, factor);
       if (!k || !this.canGuide(u, t, k)) return false;
@@ -557,18 +905,20 @@
       const tname = t.kind === 'air' ? `T${tr ? tr.num : '?'} ${t.def.name}` : `cruise missile`;
       const call = w.kind === 'srm' ? 'FOX-2' : w.kind === 'sam' ? 'BIRD AWAY' : 'FOX-3';
       const how = w.kind === 'aam' && !this.ownTrack(u, t) ? ' (data-link cue, radar silent)' : '';
-      this.log(u.side, `${u.callsign} ${call} ${w.name} at ${tname}, ${dist(u, t).toFixed(0)} km${how}`, 'shot');
+      if (!this.isDrone(t)) this.log(u.side, `${u.callsign} ${call} ${w.name} at ${tname}, ${dist(u, t).toFixed(0)} km${how}`, 'shot');
       // A radar-guided launch from an emitting shooter tripping the target's RWR.
-      if (t.kind === 'air' && (u.kind === 'sam' || (u.radarOn && this.ownTrack(u, t)))) {
+      if (t.kind === 'air' && !this.isDrone(t) && (u.kind === 'sam' || (u.radarOn && this.ownTrack(u, t)))) {
         m.warned = true;
         this.warn(t, m, 'LAUNCH WARNING');
       }
     }
 
     warn(t, m, what) {
-      if (t.kind !== 'air') return;
+      if (t.kind !== 'air' || t.ghost || this.isDrone(t)) return;
       if (!t.threats.includes(m)) t.threats.push(m);
       this.log(t.side, `${t.callsign}: ${what}, ${m.w.name} ${dist(m, t).toFixed(0)} km`, 'warn', { alert: true, ref: t });
+      // Our own radar-guided missile still needs this jet? Ask the player.
+      if (!t.ai && this.missiles.some(x => x.shooter === t && !x.lock && !x.dead && x.kind === 'aam' && !x.w.tp)) this.promptFor('guide', t);
     }
 
     // ---------- missiles ----------
@@ -597,7 +947,7 @@
 
       if (!m.active && dist(m, m.est) <= w.seeker) {
         m.active = true;
-        if (w.kind === 'aam' && this.isAlive(m.shooter)) this.log(m.side, `${m.shooter.callsign} ${w.name} PITBULL (seeker active)`, 'info');
+        if (w.kind === 'aam' && this.isAlive(m.shooter) && !this.isDrone(t)) this.log(m.side, `${m.shooter.callsign} ${w.name} PITBULL (seeker active)`, 'info');
       }
       // A notching target can break a radar seeker's lock.
       if (m.lock && alive && m.kind !== 'srm' && this.notching(t, m) && this.rand() < 0.25 * dt) {
@@ -625,8 +975,8 @@
       if ((m.t > w.burn && m.spd < V_MIN) || m.t > w.tMax * 1.5) {
         m.dead = true;
         m.end = 'energy';
-        if (alive && m.lock) this.log(t.side, `${t.callsign} defeated a ${w.name} (out of energy)`, 'good');
-        else if (alive) this.log(m.side, `${w.name} from ${m.shooter.callsign} lost its target`, 'info');
+        if (alive && m.lock && !this.isDrone(t)) this.log(t.side, `${t.callsign} defeated a ${w.name} (out of energy)`, 'good');
+        else if (alive && !this.isDrone(t)) this.log(m.side, `${w.name} from ${m.shooter.callsign} lost its target`, 'info');
       }
     }
     trySeeker(m) {
@@ -647,146 +997,251 @@
       m.dead = true;
       const energy = clamp((m.spd - V_MIN) / (w.vMax * 0.5), 0.25, 1);
       let pk = w.pk * energy;
-      if (t.kind === 'air') {
+      if (t.kind === 'air' && !t.ghost && !this.isDrone(t)) {
         pk *= 1 - t.def.ew * 0.4;
         if (t.defending) {
           if (t.def.role === 'aew') pk *= 0.9;
           else if (w.kind !== 'srm' && this.notching(t, m)) pk *= 0.45; // seeker loses the target in clutter
           else pk *= 0.95 - 0.3 * (1 - energy);                         // drag + chaff: works on a tired missile
         }
-      } else pk *= 0.6;
+      } else if (t.kind === 'cruise') pk *= 0.6 * clamp(0.35 / t.w.speed, 0.3, 1);   // fast missiles are hard to hit
+      else if (this.isDrone(t)) pk *= 0.6;
       m.pk = pk;
       m.end = 'miss';
-      if (this.rand() < pk) {
+      const hit = this.rand() < pk;
+      if (hit) {
         m.end = 'hit';
         this.fx.push({ kind: 'kill', x: t.x, y: t.y, t: this.t });
-        if (t.kind === 'air') {
-          this.score[m.side].kills++;
-          this.score[m.side].killValue += t.def.value;
-          this.log(m.side, `SPLASH ONE ${t.def.name} (${w.name} from ${m.shooter.callsign})`, 'kill');
-          this.lose(t, 1, `shot down by ${w.name}`);
-        } else {
+      } else this.fx.push({ kind: 'miss', x: t.x, y: t.y, t: this.t });
+
+      if (t.kind === 'cruise') {
+        if (hit) {
           t.dead = true;
           this.score[m.side].intercepts++;
           this.log(m.side, `${t.w.name} intercepted by ${w.name}`, 'kill');
           this.log(t.side, `A ${t.w.name} was shot down`, 'warn');
         }
-      } else {
-        this.fx.push({ kind: 'miss', x: t.x, y: t.y, t: this.t });
-        this.log(m.side, `${w.name} from ${m.shooter.callsign} missed`, 'info');
-        if (t.kind === 'air') this.log(t.side, `${t.callsign} evaded a ${w.name}`, 'good');
+        return;
       }
+      if (this.isDrone(t)) {
+        if (hit) { t.count--; this.score[m.side].droneKills++; if (t.count <= 0) t.state = 'dead'; }
+        return;
+      }
+      // Fog of war: the shooter only gets a claim, not the truth.
+      const r = this.rand();
+      const sc = this.score[m.side];
+      const tr = this.trackFor(m.side, t);
+      const tn = `T${tr ? tr.num : '?'} ${t.def.name}`;
+      if (hit ? r < 0.8 : r < 0.1) {
+        sc.claimed++;
+        if (!hit || t.ghost) sc.falseClaims++;
+        this.log(m.side, `SPLASH: ${tn} (probable kill, ${w.name} from ${m.shooter.callsign})`, 'kill');
+      } else if (hit ? true : r < 0.3) {
+        this.log(m.side, `${w.name} from ${m.shooter.callsign}: result UNCONFIRMED on ${tn}`, 'info');
+      } else this.log(m.side, `${w.name} from ${m.shooter.callsign} missed ${tn}`, 'info');
+      if (!hit) {
+        if (!t.ghost) this.log(t.side, `${t.callsign} evaded a ${w.name}`, 'good');
+        return;
+      }
+      if (t.ghost) { t.count--; if (t.count <= 0) t.state = 'dead'; return; }
+      sc.kills++;
+      sc.killValue += t.def.value;
+      this.addEsc(t.def.role === 'aew' ? 8 : 2, 'aircraft shot down');
+      this.lose(t, 1, `shot down by ${w.name}`);
     }
     lose(u, n, why) {
       u.count -= n;
       this.score[u.side].lost += n;
       this.log(u.side, `${u.callsign}: ${u.def.name} LOST, ${why}`, 'loss');
-      if (u.count <= 0) {
-        u.state = 'dead';
-        u.threats = [];
-        if (u.ai && u.cap) this.aiReplace(u);
-      }
+      if (u.count <= 0) { u.state = 'dead'; u.threats = []; }
     }
 
-    launchCruise(u, k, site) {
+    launchCruise(u, k, ref) {
       const w = WEAPONS[k];
       u.wpn[k]--;
       const m = {
         id: this.nextId++, kind: 'cruise', side: u.side, wkey: k, w, x: u.x, y: u.y,
-        hdg: bearing(u, site), spd: w.speed, t: 0, site, shooter: u, count: 1, seen: {}, trail: [], trailT: 0,
+        hdg: bearing(u, ref), spd: w.speed, t: 0, tgt: ref, shooter: u, count: 1, seen: {}, trail: [], trailT: 0,
       };
       this.missiles.push(m);
-      this.log(u.side, `${u.callsign} launched ${w.name} at ${site.id} (${dist(u, site).toFixed(0)} km)`, 'shot');
+      this.log(u.side, `${u.callsign} launched ${w.name} at ${this.targetId(ref)} (${dist(u, ref).toFixed(0)} km)`, 'shot');
     }
     updateCruise(m, dt) {
       m.t += dt;
-      const want = bearing(m, m.site);
+      const ref = m.tgt;
+      const want = bearing(m, ref);
       m.hdg = angNorm(m.hdg + clamp(angNorm(want - m.hdg), -5 * DEG * dt, 5 * DEG * dt));
       const px = m.x, py = m.y;
       m.x += Math.sin(m.hdg) * m.spd * dt;
       m.y -= Math.cos(m.hdg) * m.spd * dt;
       m.trailT -= dt;
-      if (m.trailT <= 0) { m.trail.push({ x: px, y: py }); if (m.trail.length > 24) m.trail.shift(); m.trailT = 4; }
-      if (dist(m, m.site) < m.spd * dt + 0.3) {
+      if (m.trailT <= 0) { m.trail.push({ x: px, y: py }); if (m.trail.length > 24) m.trail.shift(); m.trailT = m.spd > 0.5 ? 1 : 4; }
+      if (dist(m, ref) < m.spd * dt + 0.3) {
         m.dead = true;
         if (this.rand() < 0.9) {
-          m.site.hits++;
-          this.score[m.side].hits++;
-          this.fx.push({ kind: 'impact', x: m.site.x, y: m.site.y, t: this.t });
-          this.log('ALL', `IMPACT: ${m.w.name} hit ${m.site.id}`, 'impact');
-        } else this.log(m.side, `${m.w.name} failed to hit ${m.site.id}`, 'info');
+          this.fx.push({ kind: 'impact', x: ref.x, y: ref.y, t: this.t });
+          let destroyed = false;
+          if (ref.kind === 'site') ref.hits++;
+          else if (ref.kind === 'base') this.hitBase(ref, m.w.dmg, m.side, 0.22);
+          else destroyed = this.hitStatic(ref, 0.75, m.side);
+          this.targetHit(m.side, ref, destroyed);
+          this.log('ALL', `IMPACT: ${m.w.name} hit ${this.targetId(ref)}`, 'impact');
+          if (ref.kind === 'site') this.addEsc(3, 'strike');
+        } else this.log(m.side, `${m.w.name} failed to hit ${this.targetId(ref)}`, 'info');
       }
-      if (m.t > m.w.range / m.w.speed * 1.2) m.dead = true;
+      if (m.t > m.w.range / m.w.speed * 1.3) m.dead = true;
     }
 
     // ---------- SAMs ----------
     updateSam(u) {
-      if (u.ammo <= 0 || this.t - u.lastShot < 4) return;
+      if (!u.radarOn || u.ammo <= 0 || this.t - u.lastShot < 4) return;
       let best = null, bestScore = -Infinity;
       for (const t of this.targetsOf(ENEMY[u.side])) {
         if (!this.fireQuality(u, t)) continue;
         if (!this.chooseWeapon(u, t, AI_FIRE)) continue;
-        const sc = (t.kind === 'air' ? 1000 : 0) - dist(u, t);
+        if (t.kind === 'air' && t.def.role === 'aew' && !this.aewCleared(u.side, t)) continue;
+        const sc = (this.isDrone(t) ? 200 : t.kind === 'air' ? 1000 : 500) - dist(u, t);
         if (sc > bestScore) { bestScore = sc; best = t; }
       }
       if (best) this.tryFire(u, best, AI_FIRE);
     }
 
-    // ---------- AI ----------
+    // ---------- AI (per flight) ----------
     aiThink(u) {
       const def = u.def;
       if (def.role === 'aew') return;
       // Radar discipline: linked fighters stay silent while an AEW&C builds the picture.
-      const aew = this.hasAEW(u.side);
+      const aew = this.hasAEW(u.side) && this.ew[ENEMY[u.side]].jam.until <= this.t;
       const tgt = u.engage || (u.order && u.order.type === 'attack' ? u.order.target : null);
       const near = tgt && this.isAlive(tgt) && dist(u, tgt) < def.radar;
       const guiding = this.missiles.some(m => m.shooter === u && !m.lock && !m.w.tp && m.kind !== 'cruise');
       if (def.linked) u.radarOn = !aew || guiding || (near && (!this.fireQuality(u, tgt) || !this.tpOnly(u)));
       else u.radarOn = !!tgt || this.nearestEnemy(u, 150) != null;
 
+      if (!this.hasAAM(u) && !this.strikeWeapon(u) && u.order && u.order.type !== 'rtb') { u.engage = null; this.orderRTB(u); return; }
       if (!u.order || u.order.type !== 'orbit' || !u.cap) return;
       if (u.engage && !this.isAlive(u.engage)) u.engage = null;
       if (u.engage && dist(u, u.cap) > 140) u.engage = null;
       if (!u.engage && this.hasAAM(u)) {
         const commit = Math.max(60, this.bestRange(u) * 1.3);
-        const e = this.nearestEnemy(u, commit, true);
+        const e = this.nearestEnemy(u, commit, true, true);
         if (e) { u.engage = e; u.anchor = { x: u.cap.x, y: u.cap.y, r: u.cap.r }; }
       }
-      if (!this.hasAAM(u)) { u.engage = null; this.orderRTB(u); }
     }
-    nearestEnemy(u, range, airOnly) {
+    nearestEnemy(u, range, airOnly, mannedOnly) {
       let best = null, bd = range;
       for (const tr of this.tracks[u.side].values()) {
         const e = tr.ref;
         if (!this.isAlive(e) || (airOnly && e.kind !== 'air')) continue;
         if (e.kind !== 'air' && e.kind !== 'cruise') continue;
+        if (mannedOnly && this.isDrone(e)) continue;
         const d = dist(u, this.trackPos(tr));
         if (d < bd) { bd = d; best = e; }
       }
       return best;
     }
-    aiReplace(gone) {
-      const cap = gone.cap;
-      gone.cap = null;
-      const ready = this.units.filter(r => r.side === gone.side && r.kind === 'air' && r.state === 'ground' && !r.readyAt && r.count > 0 && r.def.role === 'fighter');
-      if (!ready.length) return;
-      ready.sort((a, b) => dist(this.base(a.base), cap) - dist(this.base(b.base), cap));
-      this.scramble(ready[0], { type: 'orbit', x: cap.x, y: cap.y, r: cap.r || 15 });
+
+    // ---------- escalation ----------
+    addEsc(n, why) {
+      const before = this.esc;
+      this.esc = Math.min(100, this.esc + n);
+      for (const mark of [50, 75, 90]) {
+        if (before < mark && this.esc >= mark && !this.escMarks.has(mark)) {
+          this.escMarks.add(mark);
+          this.log('ALL', `ESCALATION ${mark}%: ${mark === 50 ? 'international pressure rising' : mark === 75 ? 'leaders under pressure to stand down' : 'crisis is close to spiralling out of control'}`, 'warn');
+        }
+      }
+      if (this.player && before < 80 && this.esc >= 80) this.promptFor('escalation', null);
+      if (this.esc >= 100) this.finish('ESCALATION 100%: the crisis spiralled out of control', true);
+      void why;
+    }
+
+    // ---------- decision cards (player only) ----------
+    promptFor(kind, ref) {
+      if (!this.player || this.over) return false;
+      const key = kind + (ref ? ':' + (ref.id) : '');
+      if ((this.promptCd[key] || 0) > this.t || (this.promptCd[kind] || 0) > this.t) return false;
+      if (this.prompts.some(p => !p.done)) return false;
+      if (kind === 'aew' && this.t < 180) return false;
+      const cds = { guide: 30, bingo: 60, base: 300, aew: 600, escalation: 99999 };
+      this.promptCd[key] = this.t + cds[kind];
+      this.promptCd[kind] = this.t + 20;
+      const P = (text, options, def) => {
+        this.prompts.push({ id: this.nextId++, kind, ref, text, options, def, t: this.t });
+        return true;
+      };
+      if (kind === 'guide') return P(`${ref.callsign} is being targeted while its radar-guided missile is still in flight.`,
+        [['hold', 'HOLD & GUIDE', 'Keep cranking until the missile goes active. Risky.'], ['drag', 'BREAK', 'Run. Your missile goes blind.'], ['notch', 'NOTCH', 'Beam the threat. Your missile may lose support.']], 'drag');
+      if (kind === 'bingo') return P(`${ref.callsign} is at BINGO fuel in the middle of a fight.`,
+        [['rtb', 'RETURN TO BASE', 'Disengage now and land.'], ['press', 'PRESS ON', 'Keep fighting. If the tanks run dry, the jets are lost.']], 'rtb');
+      if (kind === 'base') return P(`Enemy weapons are inbound to ${ref.id}. Aircraft on the ground are exposed.`,
+        [['scramble', 'SCRAMBLE READY JETS', 'Get them airborne before impact (uses airborne slots).'], ['shelter', 'STAY IN SHELTERS', 'Keep slots free and hope the shelters hold.']], 'shelter');
+      if (kind === 'aew') return P(`An enemy AEW&C (${ref.def.name}) is within reach. Shooting it down is a big blow, but it raises escalation sharply.`,
+        [['fire', 'WEAPONS FREE ON AEW&C', 'Clear your fighters and SAMs to engage it for 5 minutes.'], ['hold', 'HOLD FIRE', 'Leave it alone for now.']], 'hold');
+      if (kind === 'escalation') return P('Escalation has passed 80%. International pressure is intense and the next step could spiral out of control.',
+        [['stand', 'STAND DOWN STRIKES', 'Recall strike flights for 5 min. Escalation -15.'], ['press', 'PRESS ON', 'Keep going and risk losing everything at 100%.']], 'stand');
+      return false;
+    }
+    answer(p, key) {
+      if (p.done) return;
+      p.done = true;
+      p.choice = key;
+      const u = p.ref;
+      if (p.kind === 'guide' && this.isAlive(u)) {
+        if (key === 'hold') { u.holdUntil = this.t + 25; u.manualDef = null; this.log(u.side, `${u.callsign} holding to guide its missile`, 'warn'); }
+        else this.cmdDefend(u, key);
+      } else if (p.kind === 'bingo' && this.isAlive(u)) {
+        if (key === 'rtb') this.orderRTB(u);
+        else this.log(u.side, `${u.callsign} pressing on below bingo fuel`, 'warn');
+      } else if (p.kind === 'base') {
+        if (key === 'scramble') this.scrambleAll(u, true);
+      } else if (p.kind === 'aew') {
+        if (key === 'fire') { this.aewClear[this.player] = this.t + 300; this.log(this.player, 'Weapons free on enemy AEW&C for 5 minutes', 'warn'); }
+      } else if (p.kind === 'escalation') {
+        if (key === 'stand') this.standDown(this.player);
+      }
+    }
+    standDown(side) {
+      this.esc = Math.max(0, this.esc - 15);
+      for (const u of this.units) {
+        if (u.side === side && u.state === 'air' && u.order && (u.order.type === 'strike' || u.order.type === 'drone')) this.orderRTB(u);
+      }
+      this.log('ALL', `${side === 'IN' ? 'India' : 'Pakistan'} stands down strike operations. Escalation eases.`, 'good');
+    }
+    // Enemy weapons/drones heading for one of our bases: offer to get jets off the ground.
+    checkBaseThreats() {
+      for (const side of SIDES) {
+        for (const tr of this.tracks[side].values()) {
+          const e = tr.ref;
+          let ref = null;
+          if (e.kind === 'cruise' && !e.dead) ref = e.tgt;
+          else if (this.isDrone(e) && e.state === 'air' && e.order && e.order.type === 'drone' && e.order.list.length) ref = this.refFor(e.order.list[0].kind, e.order.list[0].id);
+          if (!ref || ref.kind !== 'base' || ref.side !== side || dist(e, ref) > 150) continue;
+          const ready = Object.values(ref.pools).reduce((a, p) => a + p.ready, 0);
+          if (!ready) continue;
+          if (side === this.player) this.promptFor('base', ref);
+          else for (const c of this.commanders) if (c.side === side) c.baseThreat(ref);
+        }
+      }
+    }
+    // Launch every ready jet at a base, in flights of up to four.
+    scrambleAll(b, away) {
+      let launched = 0;
+      for (const ty of Object.keys(b.pools)) {
+        if (AIRCRAFT[ty].role === 'drone') continue;
+        while (b.pools[ty].ready > 0) {
+          const order = away ? { type: 'orbit', x: b.x + (this.rand() - 0.5) * 60, y: b.y + (this.rand() - 0.5) * 60, r: 12 } : null;
+          const u = this.launchFlight(b.id, ty, Math.min(4, b.pools[ty].ready), { order: order || undefined });
+          if (typeof u === 'string') return launched;
+          launched += u.count;
+        }
+      }
+      return launched;
     }
 
     // ---------- player commands ----------
-    scramble(u, order) {
-      const b = this.base(u.base);
-      u.state = 'air';
-      u.x = b.x; u.y = b.y;
-      u.spd = u.def.speed;
-      u.order = order || { type: 'orbit', x: b.x, y: b.y, r: 15 };
-      u.hdg = order ? bearing(b, order) : u.hdg;
-      u.cap = u.order.type === 'orbit' ? { x: u.order.x, y: u.order.y, r: u.order.r } : null;
-      u.anchor = null; u.engage = null;
-      this.log(u.side, `${u.callsign} (${u.def.name} x${u.count}) scrambled from ${u.base}`, 'info');
-    }
     cmdMove(u, x, y) {
+      if (this.isDrone(u)) { u.order = { type: u.def.mission === 'sead' ? 'sead' : 'orbit', x, y, r: 20 }; return; }
       u.order = { type: 'orbit', x, y, r: 15 };
       u.engage = null; u.anchor = null;
       if (u.ai) u.cap = { x, y, r: 15 };
@@ -796,10 +1251,13 @@
       u.order = { type: 'attack', target: t };
       u.engage = null;
     }
-    cmdStrike(u, site) {
+    cmdStrike(u, ref) {
+      const id = this.targetId(ref);
+      if (this.isDrone(u)) { u.order = { type: 'drone', list: [{ kind: ref.kind, id }] }; return true; }
       const wk = this.strikeWeapon(u);
       if (!wk) return false;
-      u.order = { type: 'strike', list: [{ site: site.id, n: Math.min(2, u.wpn[wk]) }] };
+      u.order = { type: 'strike', list: [{ kind: ref.kind, id, n: Math.min(2, u.wpn[wk]) }] };
+      u.strikeSince = this.t;
       u.engage = null;
       return true;
     }
@@ -807,24 +1265,64 @@
     // Manual defence: 'drag' (BREAK), 'notch', or null to hand back to automatic.
     cmdDefend(u, mode) {
       u.manualDef = mode ? { mode, until: this.t + 45 } : null;
+      u.holdUntil = 0;
+    }
+    cmdSamRadar(u, on) { u.radarOn = on; }
+
+    // ---------- replay ----------
+    record() {
+      const u = [];
+      for (const x of this.units) {
+        if (x.kind === 'air') { if (x.state === 'air') u.push([x.id, x.side, x.type, Math.round(x.x), Math.round(x.y), +x.hdg.toFixed(2), x.count, x.radarOn ? 1 : 0, x.ghost ? 1 : 0, x.callsign]); }
+        else u.push([x.id, x.side, x.kind, Math.round(x.x), Math.round(x.y), 0, x.dead ? 0 : 1, x.radarOn ? 1 : 0, 0, x.callsign]);
+      }
+      const m = this.missiles.map(x => [Math.round(x.x * 10) / 10, Math.round(x.y * 10) / 10, x.side, x.kind === 'cruise' ? 1 : 0]);
+      const fx = this.fx.filter(f => f.t > this.t - 3 && (f.kind === 'kill' || f.kind === 'impact')).map(f => [f.kind, Math.round(f.x), Math.round(f.y)]);
+      const damage = this.bases.map(b => Math.round(b.damage));
+      this.replay.push({ t: this.t, u, m, fx, damage, esc: Math.round(this.esc) });
     }
 
-    finish(reason) {
+    // ---------- end & scoring ----------
+    finish(reason, crisis) {
       if (this.over) return;
       this.over = true;
+      this.crisis = !!crisis;
       this.endReason = reason;
-      this.log('ALL', `Simulation ended: ${reason}`, 'info');
+      this.record();
+      this.log('ALL', `Night ended: ${reason}`, 'info');
+    }
+    points(side) {
+      const s = this.score[side], enemy = ENEMY[side];
+      const objHit = s.objHits.size;
+      const defended = this.objectives[enemy].filter(o => !o.hit).length;
+      return objHit * 10 + defended * 8 + s.otherHits.size * 6 + s.killValue + Math.round(s.groundKillValue / 2) + s.intercepts * 3 + s.droneKills;
     }
     summary() {
-      const s = this.score;
-      const sitesHit = this.sites.filter(x => x.hits > 0).length;
-      return {
-        IN: { ...s.IN, points: s.IN.hits * 8 + s.IN.killValue, sitesHit },
-        PK: { ...s.PK, points: s.PK.intercepts * 3 + s.PK.killValue },
-        sites: this.sites.map(x => ({ id: x.id, hits: x.hits })),
-      };
+      const out = { crisis: this.crisis };
+      for (const side of SIDES) out[side] = { ...this.score[side], objHits: this.score[side].objHits.size, otherHits: this.score[side].otherHits.size, points: this.points(side) };
+      return out;
+    }
+    // State to carry into the next night of a campaign.
+    carryOut() {
+      const pools = {};
+      for (const b of this.bases) {
+        pools[b.id] = {};
+        for (const [ty, p] of Object.entries(b.pools)) pools[b.id][ty] = p.ready + p.rearm.length;
+      }
+      for (const u of this.units) {
+        if (u.kind !== 'air' || u.state !== 'air' || u.ghost || this.isDrone(u)) continue;
+        const b = this.base(u.base);
+        pools[b.id][u.type] = (pools[b.id][u.type] || 0) + u.count;
+        const stock = this.stocks[u.side];
+        for (const [k, c] of Object.entries(u.wpn)) if (stock[k] != null) stock[k] += c;
+      }
+      const damage = {};
+      for (const b of this.bases) if (b.damage > 0) damage[b.id] = Math.round(b.damage * 0.4);
+      // Half of destroyed air defences are repaired or replaced between nights.
+      const deadStatics = this.units.filter(u => (u.kind === 'sam' || u.kind === 'radar') && u.dead && this.rand() < 0.5).map(u => u.callsign);
+      return { pools, stocks: this.stocks, damage, deadStatics, esc: this.esc };
     }
   }
 
-  Object.assign(KC, { Sim, util: { clamp, angNorm, dist, bearing, vel, DEG, ENEMY } });
+  Object.assign(KC, { Sim, EW, util: { clamp, angNorm, dist, bearing, vel, DEG, ENEMY } });
 })(globalThis.KC);

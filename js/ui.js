@@ -1,12 +1,13 @@
-// Browser front-end: game loop, input (mouse + touch), HUD panels and menus.
+// Browser front-end: game loop, input (mouse + touch), HUD, base and flight panels,
+// EW controls, decision cards, menus, campaign flow and the after-action replay.
 (function (KC) {
   const $ = id => document.getElementById(id);
-  const { WEAPONS } = KC;
+  const { WEAPONS, AIRCRAFT, PRESETS, PRESET_INFO, NIGHTS, AIR_CAP, EW } = KC;
   const { dist, ENEMY } = KC.util;
 
   const canvas = $('map');
   const R = new KC.Renderer(canvas);
-  const ui = { side: 'IN', sel: null, marks: [], speed: 5 };
+  const ui = { side: 'IN', sel: null, marks: [], speed: 5, deployN: {}, ewArm: null };
   let sim = null;
   let evSeen = 0;
   let autoPause = true;
@@ -15,9 +16,13 @@
   let last = performance.now();
   let panelTimer = 0;
   let debriefShown = false;
+  let campaign = null;      // { side, night, carry, results: [] } while a campaign is running
+  let current = null;       // { nightIdx, side, campaign }
+  let replay = null;        // after-action replay state
 
   const NET = { IN: 'IAF data link (ODL/IACCS)', PK: 'Link-17 network' };
   const SIDE_NAME = { IN: 'India', PK: 'Pakistan' };
+  const SHORT = { IN: 'IND', PK: 'PAK' };
 
   function resize() { R.resize(); }
   window.addEventListener('resize', resize);
@@ -26,17 +31,22 @@
   const SUBCONTINENT = [5.0, 60.0, 38.5, 97.0];
   R.fit(...SUBCONTINENT, 10);
 
+  const nightCfg = (idx, carry) => {
+    const n = NIGHTS[idx];
+    return { name: `NIGHT ${n.n}: ${n.title}`, start: n.start, duration: n.duration, night: n, carry };
+  };
+
   // ---------- attract mode: an AI-vs-AI battle runs behind the main menu ----------
   let attract = null, attractCam = 0;
   const ATTRACT_SHOTS = [
     [29.5, 71.5, 34.8, 77.2], [31.0, 72.5, 34.6, 76.0], [5.0, 60.0, 38.5, 97.0], [28.6, 70.0, 32.6, 75.5], [27.5, 67.5, 36.0, 79.5],
   ];
   function startAttract() {
-    attract = new KC.Sim(KC.SCENARIO, null);
-    attract.update(60 * 4);
+    attract = new KC.Sim(nightCfg(Math.floor(Math.random() * NIGHTS.length)), null);
+    attract.update(60 * 9);
   }
   function stepAttract(dt) {
-    if (!attract || attract.over || attract.t > 30 * 60) startAttract();
+    if (!attract || attract.over || attract.t > 40 * 60) startAttract();
     attract.update(dt * 6);
     attractCam -= dt;
     if (attractCam <= 0) {
@@ -47,7 +57,7 @@
   }
   function bootText() {
     const lines = [
-      ['SENSOR NETWORK', 'ONLINE'], ['AEW&C ORBITS', 'ON STATION'], ['TACTICAL DATA LINK', 'SYNCED'], ['THEATRE', 'PUNJAB / KASHMIR'],
+      ['SENSOR NETWORK', 'ONLINE'], ['AIR BASES', '25 ON ALERT'], ['TACTICAL DATA LINK', 'SYNCED'], ['THEATRE', 'PUNJAB / KASHMIR'],
     ];
     const el = $('boot');
     let i = 0;
@@ -62,91 +72,182 @@
   }
   bootText();
 
+  // ---------- menus ----------
+  function loadCampaign() {
+    try { return JSON.parse(localStorage.getItem('kc-campaign') || 'null'); } catch (e) { return null; }
+  }
+  function saveCampaign() {
+    try { localStorage.setItem('kc-campaign', JSON.stringify(campaign)); } catch (e) { /* storage unavailable */ }
+  }
+  function menuHome() {
+    const saved = loadCampaign();
+    $('menu-modes').innerHTML = `
+      <button class="side CAMP" data-go="campaign"><b>CAMPAIGN · 4 NIGHTS</b><span>6–10 May 2025, night by night. Losses, weapon stocks and damaged bases carry over. Highest total wins.</span></button>
+      ${saved && saved.night < NIGHTS.length ? `<button class="side CAMP" data-go="continue"><b>CONTINUE CAMPAIGN</b><span>${SIDE_NAME[saved.side]} · next: night ${saved.night + 1}, ${NIGHTS[saved.night].title}. Total so far IND ${saved.totals.IN} · PAK ${saved.totals.PK}.</span></button>` : ''}
+      <button class="side NIGHT" data-go="nights"><b>SINGLE NIGHT</b><span>Play any one night: opening strikes, drone night, retaliation or the airbase strikes.</span></button>
+      <button class="side TR" data-go="training"><b>TRAINING: MISSILE EVASION</b><span>Four short lessons on long, short and silent shots, and taking your own. Start here.</span></button>`;
+    for (const b of document.querySelectorAll('#menu-modes [data-go]')) {
+      b.onclick = () => {
+        const g = b.dataset.go;
+        if (g === 'campaign') menuSide(0, true);
+        else if (g === 'continue') { campaign = loadCampaign(); startNight(campaign.night, campaign.side, true); }
+        else if (g === 'nights') menuNights();
+        else if (g === 'training') KC.training.begin();
+      };
+    }
+  }
+  function menuNights() {
+    $('menu-modes').innerHTML = NIGHTS.map((n, i) => `
+      <button class="side NIGHT" data-i="${i}"><b>NIGHT ${n.n} · ${n.title}</b><span>${n.date}. ${n.summary}</span></button>`).join('') +
+      `<button class="link" id="menu-back">BACK</button>`;
+    for (const b of document.querySelectorAll('#menu-modes [data-i]')) b.onclick = () => menuSide(+b.dataset.i, false);
+    $('menu-back').onclick = menuHome;
+  }
+  function menuSide(idx, camp) {
+    const n = NIGHTS[idx];
+    const goal = s => n.targets[s].length ? `Attack ${n.targets[s].length} priority targets` : 'Defend';
+    $('menu-modes').innerHTML = `
+      <div class="pick-h">${camp ? 'CAMPAIGN' : `NIGHT ${n.n} · ${n.title}`}: CHOOSE YOUR SIDE</div>
+      <div class="sides">
+        <button class="side IN" data-side="IN"><b>COMMAND INDIA</b><span>${camp ? 'Strike first on night 1, then fight a war of air bases.' : goal('IN') + '.'} Rafale, Su-30MKI, MiG-29, Mirage 2000, Netra, Phalcon, S-400, Harop.</span></button>
+        <button class="side PK" data-side="PK"><b>COMMAND PAKISTAN</b><span>${camp ? 'Defend on night 1, then strike back.' : goal('PK') + '.'} J-10CE, JF-17, F-16, Erieye, ZDK-03, HQ-9/P, drone swarms.</span></button>
+      </div>
+      <button class="link" id="menu-back">BACK</button>`;
+    for (const b of document.querySelectorAll('#menu-modes [data-side]')) {
+      b.onclick = () => {
+        if (camp) { campaign = { side: b.dataset.side, night: 0, carry: null, totals: { IN: 0, PK: 0 }, results: [] }; saveCampaign(); }
+        else campaign = null;
+        startNight(idx, b.dataset.side, camp);
+      };
+    }
+    $('menu-back').onclick = camp ? menuHome : menuNights;
+  }
+  menuHome();
+
   // ---------- game lifecycle ----------
-  function start(side, scenario, opts) {
+  function start(side, cfg, opts) {
     opts = opts || {};
     ui.side = side;
     ui.sel = null;
+    ui.ewArm = null;
     ui.training = !!opts.training;
+    exitReplay();
     document.body.classList.remove('in-menu');
     document.body.classList.toggle('training', ui.training);
-    sim = new KC.Sim(scenario || KC.SCENARIO, side);
+    sim = new KC.Sim(cfg, side);
     evSeen = 0;
     debriefShown = false;
     $('ticker').innerHTML = '';
     $('log-body').innerHTML = '';
     $('menu').classList.add('hidden');
+    $('card').classList.add('hidden');
     // Fly from wherever the camera is (usually the menu's live battle) down into the theatre.
     if (!opts.fit) R.fit(...SUBCONTINENT, 10);
     R.flyTo(R.viewFor(...(opts.fit || THEATRE), 16), opts.fit ? 1800 : 2600);
     attract = null;
     setSpeed(0);
-    if (!ui.training) briefing(side);
     return sim;
   }
+  function startNight(idx, side, camp) {
+    current = { nightIdx: idx, side, campaign: !!camp };
+    start(side, nightCfg(idx, camp && campaign ? campaign.carry : null));
+    briefing(idx, side);
+  }
 
-  function briefing(side) {
-    const IN = `
-      <div class="h">BRIEFING: INDIA</div>
-      <p>It is just before 01:00 IST on 7 May 2025. Your strike package is airborne and flying pre-planned routes:</p>
-      <ul class="controls">
-        <li><b>VAJRA-1</b> (Rafale, SCALP-EG): Muridke, then Muzaffarabad.</li>
-        <li><b>VAJRA-2</b> (Rafale, SCALP-EG): Bahawalpur.</li>
-        <li><b>TRISHUL-1</b> (Mirage 2000, SPICE-2000): Kotli, then Sialkot. Short-range weapons, so it has to fly close to the border.</li>
-        <li>Escorts: <b>RUDRA</b> Rafales with Meteor, <b>SHAKTI</b> Su-30MKIs, <b>BAAZ</b> MiG-29s. <b>EYE-1</b> Netra and <b>EYE-2</b> Phalcon provide the air picture. The S-400 <b>SUDARSHAN</b> covers Punjab.</li>
-      </ul>
-      <p>The PAF is waiting with J-10CEs carrying PL-15Es, flying radar-silent on Erieye and ZDK-03 data. You can launch every weapon from Indian airspace. Crossing the border is allowed but dangerous.</p>
-      <p><b>Objective:</b> hit as many of the 5 target sites as you can and lose as few aircraft as possible.</p>`;
-    const PK = `
-      <div class="h">BRIEFING: PAKISTAN</div>
-      <p>It is just before 00:30 PKT on 7 May 2025. Indian strike aircraft are expected over Punjab and Kashmir tonight.</p>
-      <ul class="controls">
-        <li><b>SKYEYE-1</b> (Erieye) and <b>SKYEYE-2</b> (ZDK-03) build the picture and share it on Link-17.</li>
-        <li><b>COBRA</b> J-10CEs and <b>THUNDER-1</b> JF-17 Block IIIs carry PL-15Es. They can fire with radars <b>off</b> on AEW&amp;C tracks and the missile stays guided by the data link.</li>
-        <li><b>FALCON</b> F-16s are not on Link-17 in this sim, so they must use their own radar, which warns the target.</li>
-        <li>HQ-9/P and LY-80 SAMs protect Lahore, Islamabad and key sites.</li>
-      </ul>
-      <p>Indian aircraft can fire SCALP-EG cruise missiles from up to ~250 km inside India. They fly low and are hard to see.</p>
-      <p><b>Objective:</b> shoot down attackers (Rafales especially), intercept cruise missiles and keep target sites intact.</p>`;
-    $('debrief-body').innerHTML = (side === 'IN' ? IN : PK) +
-      `<button class="primary" id="go">BEGIN</button>`;
+  function targetLabel(o) {
+    const kind = { site: 'site', base: 'air base', sam: 'SAM site', radar: 'radar' }[o.kind];
+    return `<b>${o.id}</b> <span class="k">(${kind})</span>`;
+  }
+  function briefing(idx, side) {
+    const n = NIGHTS[idx], them = ENEMY[side];
+    const mine = n.targets[side], theirs = n.targets[them];
+    const bases = sim.bases.filter(b => b.side === side && Object.values(b.pools).some(p => p.ready));
+    const forces = bases.map(b => Object.entries(b.pools).filter(([, p]) => p.ready).map(([ty, p]) => `${b.id}: ${p.ready} ${AIRCRAFT[ty].name}`).join(', ')).join(' · ');
+    const tip = {
+      1: { IN: 'Set AMBALA to STRIKE (it already is), deploy 2 Rafales, then tap MURIDKE or BAHAWALPUR with the flight selected. PATHANKOT\'s Mirages carry short-range SPICE for KOTLI and SIALKOT (MJ).', PK: 'Get the Erieye up from NUR KHAN first, then put J-10CEs and JF-17s on patrol near Lahore and Bahawalpur. Strike flights launch from deep inside India, so watch for them early.' },
+      2: { IN: 'Launch Harops from AMRITSAR and send them near Lahore: they hunt radars on their own. Keep MiG-29s up to shoot down drone swarms.', PK: 'Launch drone swarms from SIALKOT and tap an Indian base or radar to attack it. They are slow, so send several waves. Turn SAM radars OFF if Harops are hunting them.' },
+      3: { IN: 'Expect CM-400s and H-4s against your bases. When a base is threatened, scramble its jets so they aren\'t caught on the ground.', PK: 'Set RAFIQUI and PESHAWAR to STRIKE for CM-400AKG (240 km). Use LINK JAM and DECOYS to cover the strike packages.' },
+      4: { IN: 'Set HALWARA and JODHPUR to STRIKE: each Su-30 carries one BrahMos-A (400 km). Spread them across the 7 air bases. A ceasefire comes at 45 min.', PK: 'Keep patrols up over your bases. BrahMos is fast and hard to intercept, so hit the launching Su-30s before they fire.' },
+    }[n.n][side];
+    $('debrief-body').innerHTML = `
+      <div class="h">NIGHT ${n.n} · ${n.title} <span class="k">${n.date}</span></div>
+      <p>${n.summary} You command <b class="${side}">${SIDE_NAME[side].toUpperCase()}</b>. Every aircraft starts on the ground.</p>
+      <div class="brief-grid">
+        <div><div class="h2">YOUR PRIORITY TARGETS</div>${mine.length ? '<ul class="tlist">' + mine.map(o => `<li>${targetLabel(o)}</li>`).join('') + '</ul><p class="k">10 points each.</p>' : '<p class="k">None tonight: your job is to defend.</p>'}</div>
+        <div><div class="h2">ENEMY TARGETS TO DEFEND</div>${theirs.length ? '<ul class="tlist">' + theirs.map(o => `<li>${targetLabel(o)}</li>`).join('') + '</ul><p class="k">8 points for each one still untouched at the end.</p>' : '<p class="k">The enemy is defending tonight.</p>'}</div>
+      </div>
+      <p class="k"><b>Also scores:</b> enemy aircraft shot down (their value), other enemy bases or air defences hit (6), aircraft destroyed on the ground (half value), strike weapons intercepted (3), drones (1). Escalation at 100% means <b>both sides lose</b>.</p>
+      <p class="k"><b>Your forces:</b> ${forces || 'none'}. Up to ${AIR_CAP[side]} aircraft can be airborne at once.</p>
+      <p class="tip">💡 ${tip}</p>
+      <div class="sides">
+        <button class="side ${side}" id="go-auto"><b>AUTO-DEPLOY AEW&amp;C AND PATROLS</b><span>Launch the standard AEW&amp;C orbits and combat air patrols for you. You handle strikes and everything after.</span></button>
+        <button class="side NIGHT" id="go-manual"><b>I'LL DEPLOY MYSELF</b><span>Start with everything on the ground. Tap an air base to scramble.</span></button>
+      </div>`;
     $('debrief').classList.remove('hidden');
-    $('go').onclick = () => { $('debrief').classList.add('hidden'); setSpeed(5); hint('Tap one of your flights to select it'); };
+    const go = auto => {
+      $('debrief').classList.add('hidden');
+      if (auto) sim.commanders.push(new KC.Commander(sim, side, NIGHTS[idx].ai[side], { oneShot: true }));
+      setSpeed(5);
+      hint(auto ? 'Patrols launching. Tap an air base to send more, or a flight to give it orders' : 'Tap one of your air bases (□ with a count) to scramble aircraft');
+    };
+    $('go-auto').onclick = () => go(true);
+    $('go-manual').onclick = () => go(false);
   }
 
   function showDebrief() {
     debriefShown = true;
+    setSpeed(0);
+    closeCard();
     const s = sim.summary();
-    const sitesHit = s.IN.sitesHit;
-    const ptsIN = sitesHit * 8 + s.IN.killValue;
-    const ptsPK = (5 - sitesHit) * 8 + s.PK.intercepts * 4 + s.PK.killValue;
     const me = ui.side, them = ENEMY[me];
-    const mine = me === 'IN' ? ptsIN : ptsPK, theirs = me === 'IN' ? ptsPK : ptsIN;
-    const verdict = mine > theirs ? 'VICTORY ON POINTS' : mine === theirs ? 'STALEMATE' : 'DEFEAT ON POINTS';
+    const n = sim.night;
+    let verdict;
+    if (s.crisis) verdict = 'CRISIS: BOTH SIDES LOSE';
+    else verdict = s[me].points > s[them].points ? 'VICTORY ON POINTS' : s[me].points === s[them].points ? 'STALEMATE' : 'DEFEAT ON POINTS';
+    if (current && current.campaign && campaign) {
+      campaign.results.push({ n: n.n, IN: s.crisis ? 0 : s.IN.points, PK: s.crisis ? 0 : s.PK.points });
+      campaign.totals.IN += s.crisis ? 0 : s.IN.points;
+      campaign.totals.PK += s.crisis ? 0 : s.PK.points;
+      campaign.carry = sim.carryOut();
+      campaign.night = current.nightIdx + 1;
+      saveCampaign();
+    }
     const row = (k, a, b) => `<tr><td>${k}</td><td>${a}</td><td>${b}</td></tr>`;
+    const objRows = side => sim.objectives[side].map(o => `<li class="${o.hit ? 'hit' : ''}">${o.hit ? '✓' : '✗'} ${o.id}</li>`).join('');
+    const campDone = campaign && current.campaign && campaign.night >= NIGHTS.length;
     $('debrief-body').innerHTML = `
-      <div class="h">DEBRIEF: ${sim.endReason || ''}</div>
+      <div class="h">DEBRIEF · NIGHT ${n.n}: ${sim.endReason || ''}</div>
       <div class="verdict">${verdict}</div>
       <table class="res">
         <tr><th></th><th class="IN">INDIA</th><th class="PK">PAKISTAN</th></tr>
-        ${row('Aircraft lost', s.IN.lost, s.PK.lost)}
-        ${row('Air-to-air / SAM shots', s.IN.shots, s.PK.shots)}
-        ${row('Kills', s.IN.kills, s.PK.kills)}
-        ${row('Weapons on target', s.IN.hits, '-')}
-        ${row('Cruise missiles intercepted', '-', s.PK.intercepts)}
-        ${row('Target sites hit', `${sitesHit} / 5`, '-')}
-        ${row('Points', ptsIN, ptsPK)}
+        ${row('Points', `<b>${s.IN.points}</b>`, `<b>${s.PK.points}</b>`)}
+        ${row('Priority targets hit', s.IN.objHits, s.PK.objHits)}
+        ${row('Other bases / air defences hit', s.IN.otherHits, s.PK.otherHits)}
+        ${row('Kills <span class="k">claimed → confirmed</span>', `${s.IN.claimed} → ${s.IN.kills}`, `${s.PK.claimed} → ${s.PK.kills}`)}
+        ${row('Aircraft lost in the air', s.IN.lost, s.PK.lost)}
+        ${row('Aircraft lost on the ground', s.IN.groundLost, s.PK.groundLost)}
+        ${row('Strike weapons intercepted', s.IN.intercepts, s.PK.intercepts)}
+        ${row('Drones shot down', s.IN.droneKills, s.PK.droneKills)}
+        ${row('Missiles fired', s.IN.shots, s.PK.shots)}
       </table>
-      <p class="fine">Points: India gets 8 per site hit; Pakistan gets 8 per site untouched and 4 per cruise missile intercepted; each side adds the value of the aircraft it shot down (AEW&amp;C 30, Rafale 15, J-10CE/F-16/Su-30 12, ...).</p>
+      <p class="fine">Claims were what each side's pilots reported during the night. Some were wrong: one was a decoy, some were misses. The confirmed numbers are the truth.</p>
+      ${sim.objectives.IN.length ? `<div class="h2">INDIA'S TARGETS</div><ul class="olist">${objRows('IN')}</ul>` : ''}
+      ${sim.objectives.PK.length ? `<div class="h2">PAKISTAN'S TARGETS</div><ul class="olist">${objRows('PK')}</ul>` : ''}
+      ${campaign && current.campaign ? `<div class="h2">CAMPAIGN TOTAL</div><p class="verdict small">IND ${campaign.totals.IN} · PAK ${campaign.totals.PK}${campDone ? ` · ${campaign.totals[me] > campaign.totals[them] ? 'YOU WIN THE CAMPAIGN' : campaign.totals[me] === campaign.totals[them] ? 'CAMPAIGN DRAWN' : 'YOU LOSE THE CAMPAIGN'}` : ''}</p>` : ''}
       <div class="sides" style="margin-top:14px">
-        <button class="side ${me}" id="again"><b>PLAY AGAIN</b><span>Same side: ${SIDE_NAME[me]}</span></button>
-        <button class="side ${them}" id="swap"><b>SWITCH SIDES</b><span>Play as ${SIDE_NAME[them]}</span></button>
+        <button class="side NIGHT" id="watch"><b>WATCH REPLAY</b><span>The whole night from both sides, with nothing hidden.</span></button>
+        ${current.campaign && !campDone
+          ? `<button class="side ${me}" id="next"><b>NEXT: NIGHT ${n.n + 1}</b><span>${NIGHTS[n.n].title}. Your losses and stocks carry over.</span></button>`
+          : `<button class="side ${me}" id="again"><b>PLAY AGAIN</b><span>Same night, same side.</span></button>`}
       </div>
+      <button class="link" id="swap">SWITCH SIDES</button>
       <button class="link" id="view">VIEW THE MAP</button>
       <button class="link" id="to-menu">MAIN MENU</button>`;
     $('debrief').classList.remove('hidden');
-    $('again').onclick = () => { $('debrief').classList.add('hidden'); start(me); };
-    $('swap').onclick = () => { $('debrief').classList.add('hidden'); start(them); };
+    $('watch').onclick = () => { $('debrief').classList.add('hidden'); enterReplay(); };
+    if ($('next')) $('next').onclick = () => { $('debrief').classList.add('hidden'); startNight(campaign.night, me, true); };
+    if ($('again')) $('again').onclick = () => { $('debrief').classList.add('hidden'); startNight(current.nightIdx, me, false); };
+    $('swap').onclick = () => { $('debrief').classList.add('hidden'); campaign = null; startNight(current.nightIdx, them, false); };
     $('view').onclick = () => $('debrief').classList.add('hidden');
     $('to-menu').onclick = showMenu;
   }
@@ -157,7 +258,7 @@
     ui.speed = v;
     for (const b of document.querySelectorAll('#speed button')) b.classList.toggle('on', +b.dataset.speed === v);
   }
-  for (const b of document.querySelectorAll('#speed button')) b.onclick = () => setSpeed(+b.dataset.speed);
+  for (const b of document.querySelectorAll('#speed button')) b.onclick = () => { setSpeed(+b.dataset.speed); if (replay) replay.speed = +b.dataset.speed; };
   $('btn-autopause').classList.toggle('on', autoPause);
   $('btn-autopause').onclick = () => {
     autoPause = !autoPause;
@@ -173,7 +274,6 @@
   $('menu-help').onclick = () => { helpResume = null; $('help-quit').classList.add('hidden'); $('help').classList.remove('hidden'); };
   $('help-quit').onclick = () => { $('help').classList.add('hidden'); if (KC.training) KC.training.stop(); showMenu(); };
   $('help-close').onclick = () => { $('help').classList.add('hidden'); if (helpResume) setSpeed(helpResume); };
-  for (const b of document.querySelectorAll('#menu .side')) b.onclick = () => start(b.dataset.side);
 
   let hintTimer = null;
   function hint(text) {
@@ -184,7 +284,7 @@
     h.style.bottom = pn.classList.contains('hidden') ? '' : `${pn.getBoundingClientRect().height + 22}px`;
     h.classList.add('show');
     clearTimeout(hintTimer);
-    hintTimer = setTimeout(() => h.classList.remove('show'), 3200);
+    hintTimer = setTimeout(() => h.classList.remove('show'), 3600);
   }
 
   function pumpEvents() {
@@ -199,7 +299,7 @@
       d.className = 'ev-' + e.cls;
       d.innerHTML = html;
       lg.prepend(d);
-      if (e.cls !== 'info' || /New track|PITBULL/.test(e.text) === false) {
+      if (e.cls !== 'info' || /New track|PITBULL|refuelled/.test(e.text) === false) {
         const t = d.cloneNode(true);
         tk.appendChild(t);
         setTimeout(() => t.remove(), 8000);
@@ -210,7 +310,7 @@
   }
   // Missile warning on one of our jets: optionally pause and focus it so the player can react.
   function onAlert(e) {
-    if (!autoPause || ui.training || ui.speed === 0) return;
+    if (!autoPause || ui.training || ui.speed === 0 || card) return;
     const now = performance.now();
     if (now - lastAutoPause < 4000) return;
     lastAutoPause = now;
@@ -222,15 +322,95 @@
 
   function updateTop() {
     $('clock').textContent = sim.clock() + (ui.speed === 0 ? ' ⏸' : '');
-    const s = sim.score, me = ui.side, them = ENEMY[me];
-    if (ui.training) { $('score').innerHTML = '<span class="in">TRAINING</span>'; return; }
-    const rem = Math.max(0, sim.duration - sim.t);
+    if (ui.training) { $('score').innerHTML = '<span class="in">TRAINING</span>'; $('ewbar').classList.add('hidden'); return; }
+    const me = ui.side;
+    const rem = Math.max(0, (sim.night && sim.night.ceasefireAt || sim.duration) - sim.t);
     const mm = Math.floor(rem / 60), ss = String(Math.floor(rem % 60)).padStart(2, '0');
-    const obj = me === 'IN'
-      ? `SITES HIT <b>${sim.sites.filter(x => x.hits).length}/5</b>`
-      : `INTERCEPTS <b>${s.PK.intercepts}</b> · SITES HIT <b>${sim.sites.filter(x => x.hits).length}/5</b>`;
-    $('score').innerHTML = `<span class="${me.toLowerCase()}">KILLS <b>${s[me].kills}</b> · LOST <b>${s[me].lost}</b></span> · ${obj} · T-${mm}:${ss}`;
-    void them;
+    const esc = Math.round(sim.esc);
+    const escCls = esc >= 80 ? 'hot' : esc >= 50 ? 'warm' : '';
+    const jammed = sim.ew[ENEMY[me]].jam.until > sim.t;
+    $('score').innerHTML =
+      `<span class="pts"><span class="in">${SHORT.IN} <b>${sim.points('IN')}</b></span> · <span class="pk"><b>${sim.points('PK')}</b> ${SHORT.PK}</span></span>` +
+      `<span class="esc ${escCls}" title="Escalation: at 100% both sides lose">ESC <i><u style="width:${esc}%"></u></i> ${esc}%</span>` +
+      `<span>AIR <b>${sim.airborne(me)}/${AIR_CAP[me]}</b></span>` +
+      `<span>CLAIMED <b>${sim.score[me].claimed}</b> · LOST <b>${sim.score[me].lost + sim.score[me].groundLost}</b></span>` +
+      `<span>${sim.night && sim.night.ceasefireAt ? 'CEASEFIRE' : 'END'} ${mm}:${ss}</span>` +
+      (jammed ? '<span class="jam">⚡ DATA LINK JAMMED</span>' : '');
+    updateEW();
+  }
+
+  // ---------- EW bar ----------
+  function updateEW() {
+    const bar = $('ewbar');
+    bar.classList.remove('hidden');
+    for (const kind of ['jam', 'barrage', 'decoy']) {
+      const b = bar.querySelector(`[data-ew="${kind}"]`);
+      const e = sim.ew[ui.side][kind];
+      const cd = Math.max(0, e.ready - sim.t);
+      const active = e.until > sim.t;
+      b.classList.toggle('armed', ui.ewArm === kind);
+      b.classList.toggle('active', active);
+      b.disabled = cd > 0;
+      b.querySelector('small').textContent = active ? 'ACTIVE' : cd > 0 ? fmtT(cd) : 'READY';
+      b.querySelector('i').style.width = `${cd > 0 ? 100 - (cd / EW[kind].cd) * 100 : 100}%`;
+    }
+  }
+  for (const b of document.querySelectorAll('#ewbar [data-ew]')) {
+    b.onclick = () => {
+      if (!sim) return;
+      const kind = b.dataset.ew;
+      if (!sim.ewReady(ui.side, kind)) return;
+      if (kind === 'jam') { sim.cmdEW(ui.side, 'jam'); hint('Enemy data link jammed for 75 s: their fighters need their own radars to shoot'); return; }
+      ui.ewArm = ui.ewArm === kind ? null : kind;
+      hint(ui.ewArm === 'barrage' ? 'Tap the map: enemy radars looking into that area are degraded for 60 s'
+        : ui.ewArm === 'decoy' ? 'Tap the map: two fake fighter pairs fly there to draw enemy fire' : 'Cancelled');
+      updateEW();
+    };
+  }
+
+  // ---------- decision cards ----------
+  let card = null;
+  function showCard(p) {
+    card = { p, t0: performance.now(), ttl: 10000, prevSpeed: ui.speed };
+    if (ui.speed > 1) setSpeed(1);
+    const c = $('card');
+    c.innerHTML = `<div class="ct">DECISION <span id="card-t"></span></div><p>${escapeHtml(p.text)}</p><div class="cb">` +
+      p.options.map(([k, label, sub]) => `<button data-k="${k}" class="${k === p.def ? 'def' : ''}"><b>${label}</b><span>${sub}</span></button>`).join('') +
+      `</div><div class="timer"><i id="card-bar"></i></div>`;
+    c.classList.remove('hidden');
+    c.querySelectorAll('button').forEach(b => { b.onclick = () => answerCard(b.dataset.k); });
+    if (p.ref && (p.ref.kind === 'air' || p.ref.kind === 'base')) {
+      if (p.ref.kind === 'air' && p.ref.side === ui.side) select(p.ref);
+      R.flyTo({ cx: p.ref.x, cy: p.ref.y, scale: Math.max(R.view.scale, 0.9) }, 700);
+    }
+  }
+  function answerCard(k) {
+    if (!card) return;
+    sim.answer(card.p, k);
+    const prev = card.prevSpeed;
+    closeCard();
+    if (prev > 1 && ui.speed === 1) setSpeed(prev);
+    renderPanel(true);
+  }
+  function closeCard() {
+    card = null;
+    $('card').classList.add('hidden');
+  }
+  function tickCard() {
+    if (!sim || ui.training || sim.over || debriefShown) { if (card) closeCard(); return; }
+    if (!card) {
+      const p = sim.prompts.find(x => !x.done);
+      if (p) showCard(p);
+      return;
+    }
+    if (card.p.done) { closeCard(); return; }
+    if (ui.speed === 0) { card.t0 += 16; return; }
+    const left = card.ttl - (performance.now() - card.t0);
+    const bar = $('card-bar');
+    if (bar) bar.style.width = `${Math.max(0, left / card.ttl * 100)}%`;
+    const tl = $('card-t');
+    if (tl) tl.textContent = `${Math.ceil(Math.max(0, left) / 1000)}s`;
+    if (left <= 0) answerCard(card.p.def);
   }
 
   // ---------- selection & panel ----------
@@ -242,8 +422,9 @@
   function renderPanel(force) {
     const p = $('panel');
     const ref = ui.sel && ui.sel.ref;
-    if (!ref || (ref.kind === 'air' && ref.state === 'dead') || (ref.kind === 'cruise' && ref.dead) ||
-        (ref.side !== ui.side && ref.kind !== 'site' && !sim.trackFor(ui.side, ref))) {
+    const gone = !ref || (ref.kind === 'air' && ref.state !== 'air') || (ref.kind === 'cruise' && ref.dead) ||
+      (ref.side !== ui.side && ref.kind !== 'site' && ref.kind !== 'base' && !sim.trackFor(ui.side, ref));
+    if (!sim || gone) {
       if (ui.sel) ui.sel = null;
       p.classList.add('hidden');
       ui.hudInset = 0;
@@ -251,8 +432,6 @@
       return;
     }
     p.classList.remove('hidden');
-    const pr = p.getBoundingClientRect();
-    ui.hudInset = pr.right > window.innerWidth - 170 ? pr.height + 12 : 0;
     const { info, btns } = describe(ref);
     let infoEl = p.querySelector('.info'), btnEl = p.querySelector('.btns');
     if (!infoEl) {
@@ -262,47 +441,84 @@
     infoEl.innerHTML = info;
     if (force || btns !== lastBtns) { btnEl.innerHTML = btns; lastBtns = btns; }
     btnEl.style.display = btns ? '' : 'none';
+    const pr = p.getBoundingClientRect();
+    ui.hudInset = pr.right > window.innerWidth - 170 ? pr.height + 12 : 0;
   }
 
-  function head(name, cls) {
-    return `<div class="ph"><span class="name ${cls || ''}">${name}</span><button class="x" data-act="close">✕</button></div>`;
+  function head(name, cls, tag) {
+    return `<div class="ph"><span class="name ${cls || ''}">${name}</span>${tag ? `<span class="tag">${tag}</span>` : ''}<button class="x" data-act="close">✕</button></div>`;
   }
-  function wpnChips(u) {
-    return Object.entries(u.wpn).map(([k, n]) => `<span class="chip">${WEAPONS[k].name} ${n}</span>`).join('');
+  const isAG = k => WEAPONS[k].kind === 'cruise';
+  function wpnRows(wpn) {
+    const aa = Object.entries(wpn).filter(([k, n]) => n && !isAG(k)), ag = Object.entries(wpn).filter(([k, n]) => n && isAG(k));
+    const chips = list => list.map(([k, n]) => `<span class="chip">${WEAPONS[k].name} ×${n}</span>`).join('') || '<span class="k">none</span>';
+    return `<div class="row"><span class="k">AIR-TO-AIR</span> ${chips(aa)}</div><div class="row"><span class="k">AIR-TO-SURFACE</span> ${chips(ag)}</div>`;
   }
   function status(u) {
-    if (u.state === 'ground') return u.readyAt ? `RE-ARMING (${fmtT(u.readyAt - sim.t)})` : 'READY';
     if (u.defending) return '<span class="warn">DEFENDING: missile inbound</span>';
     const o = u.order;
     const tgt = u.engage || (o && o.type === 'attack' ? o.target : null);
     if (tgt) { const tr = sim.trackFor(u.side, tgt); return `ENGAGING ${tr ? 'T' + tr.num : 'target'}`; }
     if (!o) return 'ORBITING';
-    if (o.type === 'orbit') return u.def.role === 'aew' ? 'ON STATION' : 'COMBAT AIR PATROL';
-    if (o.type === 'strike') return o.list.length ? `STRIKE → ${o.list[0].site}` : 'EGRESS';
-    if (o.type === 'rtb') return `RETURNING TO ${u.base}`;
+    if (o.type === 'orbit') return u.def.role === 'aew' ? 'ON STATION' : sim.isDrone(u) ? 'LOITERING' : 'COMBAT AIR PATROL';
+    if (o.type === 'sead') return 'HUNTING RADARS';
+    if (o.type === 'strike' || o.type === 'drone') return o.list.length ? `STRIKE → ${o.list[0].id}` : 'EGRESS';
+    if (o.type === 'rtb') return `RETURNING TO ${o.base || u.base}`;
     return o.type.toUpperCase();
   }
   const fmtT = s => `${Math.floor(Math.max(0, s) / 60)}:${String(Math.floor(Math.max(0, s) % 60)).padStart(2, '0')}`;
+  const objFor = ref => {
+    const mine = sim.objectives[ui.side].find(o => o.ref === ref);
+    const theirs = sim.objectives[ENEMY[ui.side]].find(o => o.ref === ref);
+    return mine ? `<span class="tag hot">YOUR TARGET${mine.hit ? ' · HIT' : ''}</span>` : theirs ? `<span class="tag def">DEFEND${theirs.hit ? ' · HIT' : ''}</span>` : '';
+  };
+
+  function describeBase(b) {
+    const own = b.side === ui.side;
+    const st = !sim.baseOpen(b) ? `<span class="warn">RUNWAY CLOSED · repairs ~${fmtT((b.damage - 59) / 5 * 60)}</span>`
+      : b.damage > 0 ? `<span class="warm">DAMAGED ${Math.round(b.damage)}%</span>` : 'OPERATIONAL';
+    let info = head(`${b.id} AIR BASE`, b.side) + `<div class="row">${st} ${objFor(b)}</div>`;
+    if (!own) {
+      const types = Object.keys(b.pools).map(ty => AIRCRAFT[ty].name).join(', ');
+      info += `<div class="note">${types ? 'Intelligence: ' + types + ' based here.' : 'Divert airfield.'} Select a strike flight or drones, then tap this base to attack it. Hits close the runway at ${60}% damage and can destroy aircraft on the ground.</div>`;
+      return { info, btns: '' };
+    }
+    info += `<div class="row"><span class="k">Airborne</span> ${sim.airborne(ui.side)} / ${AIR_CAP[ui.side]} aircraft</div>`;
+    let btns = '';
+    const types = Object.keys(b.pools);
+    if (!types.length) info += `<div class="note">Divert airfield: no aircraft based here, but any of your jets can land, refuel and re-arm.</div>`;
+    for (const ty of types) {
+      const p = b.pools[ty], def = AIRCRAFT[ty];
+      const up = sim.units.filter(u => u.kind === 'air' && u.state === 'air' && u.base === b.id && u.type === ty && !u.ghost).reduce((a, u) => a + u.count, 0);
+      const next = p.rearm.length ? Math.min(...p.rearm) - sim.t : 0;
+      const key = b.id + ty;
+      const nDeploy = Math.max(1, Math.min(ui.deployN[key] || (def.role === 'drone' ? 4 : def.role === 'aew' ? 1 : 2), Math.max(1, p.ready)));
+      ui.deployN[key] = nDeploy;
+      const preset = b.preset[ty];
+      const per = PRESETS[ty][preset] || {};
+      const stock = sim.stocks[ui.side];
+      const perTxt = Object.entries(per).map(([k, c]) => `${WEAPONS[k].name} ×${c}${stock[k] != null ? ` <span class="k">(${stock[k]} left)</span>` : ''}`).join(' · ');
+      btns += `<div class="pool">
+        <div class="pool-h"><b>${def.name}</b><span>${p.ready} ready · ${p.rearm.length} re-arming${p.rearm.length ? ` (next ${fmtT(next)})` : ''} · ${up} airborne</span></div>
+        ${Object.keys(PRESETS[ty]).length > 1 ? `<div class="seg2">${Object.keys(PRESETS[ty]).map(pr => `<button data-act="preset" data-base="${b.id}" data-type="${ty}" data-p="${pr}" class="${pr === preset ? 'on' : ''}">${pr}</button>`).join('')}</div>` : ''}
+        <div class="row k">${PRESET_INFO[preset] || ''}${perTxt ? '<br>Per jet: ' + perTxt : ''}</div>
+        <div class="deploy">
+          <button data-act="n-" data-key="${key}">−</button><span class="n">${nDeploy}</span><button data-act="n+" data-key="${key}" data-max="${p.ready}">+</button>
+          <button data-act="deploy" data-base="${b.id}" data-type="${ty}" ${p.ready ? '' : 'disabled'}>DEPLOY ${nDeploy}</button>
+          ${def.role !== 'drone' ? `<button data-act="scramble" data-base="${b.id}" ${p.ready ? '' : 'disabled'}>SCRAMBLE ALL</button>` : ''}
+        </div></div>`;
+    }
+    return { info, btns };
+  }
 
   function describe(ref) {
     const own = ref.side === ui.side;
-    if (ref.kind === 'base') {
-      const flights = sim.units.filter(u => u.kind === 'air' && u.base === ref.id && u.state === 'ground' && u.count > 0);
-      let info = head(`${ref.id} AIR BASE`, ref.side);
-      if (!own) return { info: info + `<div class="note">Enemy airbase.</div>`, btns: '' };
-      if (!flights.length) info += `<div class="note">No aircraft on the ground.</div>`;
-      let btns = '';
-      for (const u of flights) {
-        btns += `<div class="rsv" style="width:100%"><span>${u.callsign} · ${u.def.name} ×${u.count}<br><span class="k">${u.readyAt ? 're-arming ' + fmtT(u.readyAt - sim.t) : Object.entries(u.wpn).map(([k, n]) => WEAPONS[k].name + ' ' + n).join(', ')}</span></span>` +
-          (u.readyAt ? '' : `<button data-act="scramble" data-id="${u.id}">SCRAMBLE</button>`) + `</div>`;
-      }
-      return { info, btns };
-    }
+    if (ref.kind === 'base') return describeBase(ref);
     if (ref.kind === 'site') {
-      let info = head(`TARGET: ${ref.id}`, '') +
+      let info = head(`TARGET: ${ref.id}`, '', objFor(ref)) +
         `<div class="row"><span class="k">Weapons on target:</span> ${ref.hits}</div>`;
       info += ui.side === 'IN'
-        ? `<div class="note">Select a strike flight (VAJRA or TRISHUL), then tap this site to order a strike. The flight launches once it is in weapon range.</div>`
+        ? `<div class="note">Select a strike flight, then tap this site. The flight launches once it is in weapon range.</div>`
         : `<div class="note">Protect this site. Cruise missiles fly low, so they need AEW&amp;C coverage to be seen in time for an intercept.</div>`;
       return { info, btns: '' };
     }
@@ -310,17 +526,29 @@
     if (ref.kind === 'sam') {
       const w = WEAPONS[ref.def.weapon];
       return {
-        info: head(`${ref.callsign} · ${ref.def.name}`, ref.side) +
-          `<div class="row"><span class="k">Missiles:</span> ${ref.ammo} × ${w.name} · <span class="k">reach</span> ~${Math.round(w.range * 0.7)} km</div>` +
-          `<div class="note">Surface-to-air missile site. Fires automatically at enemies in reach. Its radar emits all the time, so the enemy knows where it is.</div>`,
-        btns: '',
+        info: head(`${ref.callsign} · ${ref.def.name}`, ref.side, objFor(ref)) +
+          (ref.dead ? '<div class="row warn">DESTROYED</div>' : `<div class="row"><span class="k">Missiles:</span> ${ref.ammo} × ${w.name} · <span class="k">reach</span> ~${Math.round(w.range * 0.7)} km · <span class="k">radar</span> ${ref.radarOn ? 'ON' : '<span class="warn">OFF</span>'}</div>`) +
+          `<div class="note">Fires automatically at enemies in reach. While its radar is ON it can be found and hunted by anti-radiation drones. Turn it OFF to hide, but then it can't shoot.</div>`,
+        btns: ref.dead ? '' : `<button data-act="samradar" class="${ref.radarOn ? 'on' : ''}">RADAR ${ref.radarOn ? 'ON' : 'OFF'}</button>`,
       };
     }
     if (ref.kind === 'radar') {
-      return { info: head(`${ref.callsign} · GROUND RADAR`, ref.side) + `<div class="note">Feeds the ${NET[ref.side]}. Range ~${ref.range} km against fighters at altitude, much less against low-flying cruise missiles.</div>`, btns: '' };
+      return {
+        info: head(`${ref.callsign} · GROUND RADAR`, ref.side, objFor(ref)) + (ref.dead ? '<div class="row warn">DESTROYED</div>' : '') +
+          `<div class="note">Feeds the ${NET[ref.side]}. Range ~${ref.range} km against fighters at altitude, much less against low-flying cruise missiles and drones.</div>`,
+        btns: ref.dead ? '' : `<button data-act="samradar" class="${ref.radarOn ? 'on' : ''}">RADAR ${ref.radarOn ? 'ON' : 'OFF'}</button>`,
+      };
     }
     // Own flight
     const u = ref, def = u.def;
+    if (u.ghost) return { info: head(`${u.callsign}`, u.side) + `<div class="note">Electronic decoys pretending to be a pair of ${def.name}s. Enemy missiles fired at them are wasted. They vanish in ${fmtT(u.fuel)}.</div>`, btns: '' };
+    if (sim.isDrone(u)) {
+      return {
+        info: head(`${u.callsign} · ${def.name} ×${u.count}`, u.side) + `<div class="row">${status(u)}</div>` +
+          `<div class="row"><span class="k">Endurance</span> ${fmtT(u.fuel)}</div><div class="note">${def.note} Tap the map to move them${def.mission === 'sead' ? ' (they hunt radars near that point)' : ''}, or tap an enemy base, SAM or radar to attack it.</div>`,
+        btns: '',
+      };
+    }
     const threats = u.threats.filter(m => !m.dead).length;
     const near = u.threats.filter(m => !m.dead).sort((a, b) => dist(a, u) - dist(b, u))[0];
     let threatRow = '';
@@ -330,15 +558,16 @@
         `<div class="row"><span class="k">If you BREAK now:</span> ${thd.lethal ? '<span class="warn">it still catches you, so NOTCH</span>' : 'it runs out of energy'}</div>`;
     }
     const defRow = u.defending ? `<div class="row warn">DEFENDING: ${u.defMode === 'notch' ? 'NOTCH (beaming the missile)' : 'BREAK/DRAG (running away)'}${u.manualDef ? ' · manual' : ' · auto'}</div>` : '';
-    let info = head(`${u.callsign} · ${def.name}${u.count > 1 ? ' ×' + u.count : ''}`, u.side) +
-      `<div class="row">${status(u)}</div>` +
-      (Object.keys(u.wpn).length ? `<div class="row">${wpnChips(u)}</div>` : '') +
+    const fuelPct = Math.round(100 * Math.min(1, u.fuel / def.fuel));
+    const rangeKm = Math.round(u.fuel * def.speed);
+    const info = head(`${u.callsign} · ${def.name}${u.count > 1 ? ' ×' + u.count : ''}`, u.side) +
+      `<div class="row">${status(u)}${u.bingo ? ' · <span class="warn">BINGO</span>' : ''}</div>` +
+      (def.role === 'aew' ? '' : wpnRows(u.wpn)) +
       `<div class="row"><span class="k">Radar</span> ${def.role === 'aew' ? 'ON (AEW&C)' : u.radarOn ? 'ON, emitting' : 'OFF, silent'}` +
       ` · <span class="k">Link</span> ${def.linked ? 'on net' : '<span class="warn">none</span>'}` +
-      (u.state === 'air' ? ` · <span class="k">Fuel</span><span class="bar"><i style="width:${Math.round(100 * Math.min(1, u.fuel / (def.role === 'aew' ? 20000 : 9000)))}%"></i></span>` : '') + `</div>` +
+      ` · <span class="k">Fuel</span><span class="bar"><i style="width:${fuelPct}%"></i></span> ~${rangeKm} km</div>` +
       threatRow + defRow +
-      `<div class="note">${def.note}</div>`;
-    if (u.state !== 'air') return { info, btns: '' };
+      `<div class="note">${def.note}${sim.strikeWeapon(u) ? '<br><b>Tap an enemy base, SAM, radar or target</b> to strike it.' : ''}</div>`;
     let btns = '';
     if (def.role === 'fighter') {
       btns += `<button data-act="radar" class="${u.radarOn ? 'on' : ''}">RADAR ${u.radarOn ? 'ON' : 'OFF'}</button>`;
@@ -356,19 +585,20 @@
     if (!tr) return { info: '', btns: '' };
     if (e.kind === 'sam' || e.kind === 'radar') {
       return {
-        info: head(`${e.kind === 'sam' ? 'SAM SITE' : 'RADAR'}: ${e.callsign}`, e.side) +
-          `<div class="note">Located by its radar emissions. ${e.kind === 'sam' ? `Estimated reach ~${Math.round(WEAPONS[e.def.weapon].range * 0.7)} km. Stay outside the red ring.` : ''}</div>`,
+        info: head(`${e.kind === 'sam' ? 'SAM SITE' : 'RADAR'}: ${e.callsign}`, e.side, objFor(e)) + (e.dead ? '<div class="row">DESTROYED (battle damage assessment)</div>' : '') +
+          `<div class="note">Known from intelligence and its emissions. ${e.kind === 'sam' ? `Estimated reach ~${Math.round(WEAPONS[e.def.weapon].range * 0.7)} km: stay outside the red ring.` : ''} Strike it with a strike flight or send Harop / drones.</div>`,
         btns: '',
       };
     }
     if (e.kind === 'cruise') {
-      return { info: head(`T${tr.num} · CRUISE MISSILE`, e.side) + `<div class="note">Low-flying ${e.w.name}. Select a fighter and tap it to attempt an intercept.</div>`, btns: '' };
+      return { info: head(`T${tr.num} · ${e.w.name.toUpperCase()}`, e.side) + `<div class="note">Inbound to ${sim.targetId(e.tgt)}. Select a fighter and tap it to attempt an intercept.</div>`, btns: '' };
     }
     const seen = e.seen[ui.side] || { by: [] };
     const sources = seen.by.map(id => sim.unit(id)).filter(Boolean).map(u => u.callsign).slice(0, 4).join(', ');
     const hdg = Math.round(((e.hdg * 180 / Math.PI) + 360) % 360);
     const age = sim.t - tr.t;
-    let info = head(`T${tr.num} · ${tr.q === 'esm' ? e.def.name + '?' : e.def.name + (e.count > 1 ? ' ×' + e.count : '')}`, e.side) +
+    const n = tr.count || e.count;
+    let info = head(`T${tr.num} · ${tr.q === 'esm' ? e.def.name + '?' : e.def.name + (n > 1 ? ' ×' + n : '')}`, e.side) +
       `<div class="row"><span class="k">Quality</span> ${tr.q === 'esm' ? 'PASSIVE (radar emissions only)' : age > 3 ? `LOST ${Math.round(age)}s ago` : 'RADAR track'}` +
       (tr.q !== 'esm' && age <= 3 ? ` · <span class="k">hdg</span> ${String(hdg).padStart(3, '0')}°` : '') + `</div>`;
     if (sources) info += `<div class="row"><span class="k">Seen by</span> ${sources}</div>`;
@@ -383,14 +613,34 @@
     const ref = ui.sel && ui.sel.ref;
     const act = b.dataset.act;
     if (act === 'close') { select(null); return; }
-    if (act === 'scramble') {
-      const u = sim.unit(+b.dataset.id);
-      if (u && u.state === 'ground' && !u.readyAt) {
-        sim.scramble(u, null);
-        select(u);
-        hint(`${u.callsign} airborne. Tap the map to send it on patrol.`);
-      }
+    if (act === 'preset') {
+      sim.base(b.dataset.base).preset[b.dataset.type] = b.dataset.p;
+      hint(`${b.dataset.base}: ${AIRCRAFT[b.dataset.type].name}s will take off with the ${b.dataset.p} loadout`);
+      renderPanel(true); return;
+    }
+    if (act === 'n-' || act === 'n+') {
+      const k = b.dataset.key;
+      ui.deployN[k] = Math.max(1, (ui.deployN[k] || 2) + (act === 'n+' ? 1 : -1));
+      if (act === 'n+' && b.dataset.max) ui.deployN[k] = Math.min(ui.deployN[k], Math.max(1, +b.dataset.max));
+      renderPanel(true); return;
+    }
+    if (act === 'deploy') {
+      const key = b.dataset.base + b.dataset.type;
+      const u = sim.launchFlight(b.dataset.base, b.dataset.type, ui.deployN[key] || 2);
+      if (typeof u === 'string') { hint(u); return; }
+      select(u);
+      hint(`${u.callsign} airborne. ${sim.strikeWeapon(u) ? 'Tap a target to strike it, or the map to move.' : sim.isDrone(u) ? 'Tap a target or the map.' : 'Tap the map to send it on patrol.'}`);
       return;
+    }
+    if (act === 'scramble') {
+      const n = sim.scrambleAll(sim.base(b.dataset.base), false);
+      hint(n ? `${n} aircraft scrambled from ${b.dataset.base}` : `Can't scramble: ${sim.airborne(ui.side) >= AIR_CAP[ui.side] ? 'airborne limit reached' : 'runway closed or nothing ready'}`);
+      renderPanel(true); return;
+    }
+    if (act === 'samradar' && ref) {
+      sim.cmdSamRadar(ref, !ref.radarOn);
+      hint(ref.radarOn ? `${ref.callsign} radar ON: it can shoot, but drones can home on it` : `${ref.callsign} radar OFF: hidden from anti-radiation drones, but blind`);
+      renderPanel(true); return;
     }
     if (!ref || ref.kind !== 'air') return;
     if (act === 'radar') {
@@ -405,7 +655,7 @@
       return;
     } else if (act === 'rtb') {
       sim.cmdRTB(ref);
-      hint(`${ref.callsign} returning to ${ref.base}`);
+      hint(`${ref.callsign} returning to ${ref.order.base}: it lands, refuels and re-arms there`);
     }
     renderPanel(true);
   });
@@ -441,21 +691,41 @@
       const e = tr.ref;
       if (e.kind === 'cruise' && !R.missileVisible(sim, e, ui.side)) continue;
       const p = tr.static ? tr : (e.kind === 'cruise' ? e : sim.trackPos(tr));
-      add(e, p.x, p.y, 'enemy', e.kind === 'air' ? 6 : 0);
+      add(e, p.x, p.y, 'enemy', e.kind === 'air' ? 6 : 1);
     }
     for (const s of sim.sites) add(s, s.x, s.y, 'site', 2);
-    for (const b of sim.bases) if (b.side === ui.side) add(b, b.x, b.y, 'base', -2);
+    for (const b of sim.bases) add(b, b.x, b.y, b.side === ui.side ? 'base' : 'ebase', b.side === ui.side ? -2 : -1);
     cands.sort((a, b) => a.d - b.d);
     return cands[0] || null;
   }
 
   function onTap(sx, sy) {
-    if (!sim) return;
+    if (!sim || replay) return;
+    const w = R.toWorld(sx, sy);
+    if (ui.ewArm) {
+      const kind = ui.ewArm;
+      ui.ewArm = null;
+      if (sim.cmdEW(ui.side, kind, w.x, w.y)) {
+        ui.marks.push({ x: w.x, y: w.y, t: performance.now() / 1000 });
+        hint(kind === 'barrage' ? 'Barrage jamming active for 60 s' : 'Decoys launched');
+      }
+      updateEW();
+      return;
+    }
     const hit = pick(sx, sy);
     const s = ui.sel && ui.sel.ref;
-    const ownAir = s && s.kind === 'air' && s.side === ui.side && s.state === 'air';
-    if (ownAir && hit && s.def.role === 'fighter') {
-      if (hit.kind === 'enemy' && (hit.ref.kind === 'air' || hit.ref.kind === 'cruise')) {
+    const ownAir = s && s.kind === 'air' && s.side === ui.side && s.state === 'air' && !s.ghost;
+    if (ownAir && hit) {
+      const strikeable = hit.ref.side !== ui.side && (hit.kind === 'site' || hit.kind === 'ebase' || (hit.kind === 'enemy' && (hit.ref.kind === 'sam' || hit.ref.kind === 'radar')));
+      if (strikeable && (sim.strikeWeapon(s) || sim.isDrone(s))) {
+        sim.cmdStrike(s, hit.ref);
+        const wk = sim.strikeWeapon(s);
+        hint(sim.isDrone(s) ? `${s.callsign} → attacking ${sim.targetId(hit.ref)}`
+          : `${s.callsign} → strike ${sim.targetId(hit.ref)} with ${WEAPONS[wk].name} (launches from ~${Math.round(WEAPONS[wk].range * 0.9)} km)`);
+        renderPanel(true);
+        return;
+      }
+      if (s.def.role === 'fighter' && hit.kind === 'enemy' && (hit.ref.kind === 'air' || hit.ref.kind === 'cruise')) {
         const tr = sim.trackFor(ui.side, hit.ref);
         if (!sim.hasAAM(s)) { hint(`${s.callsign} has no air-to-air missiles left`); return; }
         sim.cmdAttack(s, hit.ref);
@@ -464,21 +734,13 @@
         renderPanel(true);
         return;
       }
-      if (hit.kind === 'site' && hit.ref.side !== ui.side) {
-        const wk = sim.strikeWeapon(s);
-        if (!wk) { hint(`${s.callsign} carries no strike weapons`); return; }
-        sim.cmdStrike(s, hit.ref);
-        hint(`${s.callsign} → strike ${hit.ref.id} with ${WEAPONS[wk].name} (launches from ~${Math.round(WEAPONS[wk].range * 0.9)} km)`);
-        renderPanel(true);
-        return;
-      }
+      if (strikeable && hit.kind !== 'ebase') { hint(`${s.callsign} carries no strike weapons. Land and switch the base to STRIKE`); return; }
     }
-    if (hit) {
+    if (hit && !(ownAir && hit.kind === 'ebase')) {
       if (s === hit.ref) select(null); else select(hit.ref);
       return;
     }
     if (ownAir) {
-      const w = R.toWorld(sx, sy);
       sim.cmdMove(s, w.x, w.y);
       ui.marks.push({ x: w.x, y: w.y, t: performance.now() / 1000 });
       if (ui.marks.length > 10) ui.marks.shift();
@@ -504,6 +766,10 @@
     }
   });
   canvas.addEventListener('pointermove', e => {
+    if (e.pointerType === 'mouse') {
+      const r = canvas.getBoundingClientRect();
+      R.cursor = { x: e.clientX - r.left, y: e.clientY - r.top };
+    }
     const p = ptrs.get(e.pointerId);
     if (!p) return;
     const dx = e.clientX - p.x, dy = e.clientY - p.y;
@@ -532,11 +798,6 @@
     }
   };
   canvas.addEventListener('pointerup', up);
-  canvas.addEventListener('pointermove', e => {
-    if (e.pointerType !== 'mouse') return;
-    const r = canvas.getBoundingClientRect();
-    R.cursor = { x: e.clientX - r.left, y: e.clientY - r.top };
-  });
   canvas.addEventListener('pointerleave', () => { R.cursor = null; });
   canvas.addEventListener('pointercancel', up);
   canvas.addEventListener('wheel', e => {
@@ -547,12 +808,12 @@
 
   window.addEventListener('keydown', e => {
     if (!sim) return;
-    if (e.code === 'Space') { e.preventDefault(); setSpeed(ui.speed ? 0 : ui.lastSpeed || 5); }
+    if (e.code === 'Space') { e.preventDefault(); if (replay) replay.playing = !replay.playing; else setSpeed(ui.speed ? 0 : ui.lastSpeed || 5); }
     const map = { Digit1: 0, Digit2: 1, Digit3: 5, Digit4: 15, Digit5: 40 };
     if (e.code in map) setSpeed(map[e.code]);
-    if (e.code === 'Escape') select(null);
+    if (e.code === 'Escape') { ui.ewArm = null; select(null); }
     const ref = ui.sel && ui.sel.ref;
-    if ((e.code === 'KeyB' || e.code === 'KeyN') && ref && ref.kind === 'air' && ref.side === ui.side && ref.state === 'air') {
+    if ((e.code === 'KeyB' || e.code === 'KeyN') && ref && ref.kind === 'air' && ref.side === ui.side && ref.state === 'air' && !sim.isDrone(ref)) {
       if (e.code === 'KeyB' || ref.def.role === 'fighter') defend(ref, e.code === 'KeyB' ? 'drag' : 'notch');
     }
     if (e.code === 'KeyR' && ref && ref.kind === 'air' && ref.side === ui.side && ref.def.role === 'fighter') {
@@ -560,36 +821,94 @@
     }
   });
 
+  // ---------- after-action replay ----------
+  function replayState(i) {
+    const f = sim.replay[i];
+    const units = f.u.map(([id, side, type, x, y, hdg, count, radar, ghost, callsign]) => {
+      const orig = sim.unit(id);
+      if (AIRCRAFT[type]) return { id, side, kind: 'air', type, def: AIRCRAFT[type], x, y, hdg, spd: AIRCRAFT[type].speed, count, radarOn: !!radar, ghost: !!ghost, callsign, state: 'air', threats: [] };
+      return { ...orig, x, y, dead: !count, radarOn: !!radar };
+    });
+    const missiles = f.m.map(([x, y, side, cruise]) => ({ x, y, side, kind: cruise ? 'cruise' : 'aam', trail: [], seen: {} }));
+    const bases = sim.bases.map((b, k) => ({ ...b, damage: f.damage[k], pools: {} }));
+    const fx = f.fx.map(([kind, x, y]) => ({ kind, x, y, t: f.t - 1 }));
+    return {
+      t: f.t, units, missiles, bases, fx, sites: sim.sites, tracks: sim.tracks, isAlive: () => true, isDrone: u => u.def && u.def.role === 'drone',
+      baseOpen: b => b.damage < 60,
+    };
+  }
+  function enterReplay() {
+    if (!sim || !sim.replay.length) return;
+    replay = { i: 0, playing: true, acc: 0, speed: 15 };
+    setSpeed(15);
+    document.body.classList.add('replaying');
+    $('replaybar').classList.remove('hidden');
+    const sl = $('rp-slider');
+    sl.max = sim.replay.length - 1;
+    sl.value = 0;
+    select(null);
+    R.flyTo(R.viewFor(...THEATRE, 16), 1000);
+  }
+  function exitReplay() {
+    if (!replay) return;
+    replay = null;
+    document.body.classList.remove('replaying');
+    $('replaybar').classList.add('hidden');
+  }
+  $('rp-play').onclick = () => { if (replay) replay.playing = !replay.playing; };
+  $('rp-slider').oninput = e => { if (replay) { replay.i = +e.target.value; replay.acc = 0; } };
+  $('rp-exit').onclick = () => { exitReplay(); showDebrief(); };
+  function stepReplay(dt) {
+    if (replay.playing) {
+      replay.acc += dt * (ui.speed || 0);
+      while (replay.acc >= 3 && replay.i < sim.replay.length - 1) { replay.acc -= 3; replay.i++; }
+      if (replay.i >= sim.replay.length - 1) replay.playing = false;
+    }
+    $('rp-slider').value = replay.i;
+    $('rp-play').textContent = replay.playing ? 'II' : '▶';
+    const f = sim.replay[replay.i];
+    $('rp-time').textContent = `${sim.clock(f.t)} · ESC ${f.esc}%`;
+    R.draw(replayState(replay.i), { side: 'ALL', marks: [] });
+  }
+
   // ---------- main loop ----------
   function frame(now) {
     const dt = Math.min(0.1, (now - last) / 1000);
     last = now;
-    if (sim && !sim.over) sim.update(dt * ui.speed);
-    if (!sim) {
-      stepAttract(dt);
-      R.draw(attract, { side: 'ALL', marks: [] });
-    } else R.draw(sim, ui);
-    if (sim) {
-      pumpEvents();
-      panelTimer -= dt;
-      if (panelTimer <= 0) { renderPanel(false); updateTop(); panelTimer = 0.25; }
-      if (KC.training && ui.training) KC.training.tick();
-      if (sim.over && !debriefShown && !ui.training) { renderPanel(false); updateTop(); showDebrief(); }
+    if (replay && sim) stepReplay(dt);
+    else {
+      if (sim && !sim.over) sim.update(dt * ui.speed);
+      if (!sim) {
+        stepAttract(dt);
+        R.draw(attract, { side: 'ALL', marks: [] });
+      } else R.draw(sim, ui);
+      if (sim) {
+        pumpEvents();
+        tickCard();
+        panelTimer -= dt;
+        if (panelTimer <= 0) { renderPanel(false); updateTop(); panelTimer = 0.25; }
+        if (KC.training && ui.training) KC.training.tick();
+        if (sim.over && !debriefShown && !ui.training) { renderPanel(false); updateTop(); showDebrief(); }
+      }
     }
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
 
-  KC.app = { ui, R, get sim() { return sim; }, start, setSpeed, select, hint, renderPanel, showMenu };
   function showMenu() {
     ui.training = false;
+    exitReplay();
+    closeCard();
     document.body.classList.remove('training');
     document.body.classList.add('in-menu');
     sim = null;
     attractCam = 0;
     $('panel').classList.add('hidden');
     $('debrief').classList.add('hidden');
+    $('ewbar').classList.add('hidden');
     $('menu').classList.remove('hidden');
+    menuHome();
     bootText();
   }
+  KC.app = { ui, R, get sim() { return sim; }, start, startNight, setSpeed, select, hint, renderPanel, showMenu };
 })(globalThis.KC);

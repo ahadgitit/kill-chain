@@ -174,6 +174,8 @@
       const spectator = side === 'ALL';
       this.drawSites(sim, ui);
       this.drawBases(sim, ui);
+      this.drawJamming(sim);
+      if (!spectator) this.drawObjectives(sim, ui);
       if (this.showSensors) {
         for (const s of spectator ? ['IN', 'PK'] : [side]) this.drawSensors(sim, s, ui, spectator);
       }
@@ -351,10 +353,26 @@
         c.globalAlpha = own ? 0.9 : 0.45;
         c.strokeStyle = col; c.lineWidth = 1;
         c.strokeRect(p.x - 3.5, p.y - 3.5, 7, 7);
-        const ready = own && sim.units.some(u => u.kind === 'air' && u.base === b.id && u.state === 'ground' && u.count > 0);
-        if (ready) { c.fillStyle = col; c.fillRect(p.x - 2, p.y - 2, 4, 4); }
-        if (this.view.scale > 0.7 || (own && this.view.scale > 0.3)) this.label(b.id, p.x, p.y + 11, col, 'center', 9);
-        if (ui.sel && ui.sel.ref === b) { c.globalAlpha = 1; c.strokeRect(p.x - 7, p.y - 7, 14, 14); }
+        const pools = Object.entries(b.pools || {});
+        const ready = pools.reduce((a, [, q]) => a + q.ready, 0);
+        if (own && ready) { c.fillStyle = col; c.fillRect(p.x - 2, p.y - 2, 4, 4); }
+        // Damage: a red arc that fills toward closure; a cross when the runway is closed.
+        if (b.damage > 0) {
+          c.globalAlpha = 0.9; c.strokeStyle = COL.site; c.lineWidth = 2;
+          c.beginPath(); c.arc(p.x, p.y, 8, -Math.PI / 2, -Math.PI / 2 + Math.min(1, b.damage / 60) * Math.PI * 2); c.stroke();
+          if (b.damage >= 60) {
+            c.beginPath(); c.moveTo(p.x - 6, p.y - 6); c.lineTo(p.x + 6, p.y + 6); c.moveTo(p.x + 6, p.y - 6); c.lineTo(p.x - 6, p.y + 6); c.stroke();
+          }
+          c.lineWidth = 1; c.globalAlpha = own ? 0.9 : 0.6;
+        }
+        if (this.view.scale > 0.7 || (own && this.view.scale > 0.3)) {
+          this.label(b.id + (b.damage >= 60 ? ' · CLOSED' : ''), p.x, p.y + 12, b.damage >= 60 ? COL.site : col, 'center', 9);
+          if (own && pools.length && ui.side !== 'ALL') {
+            const txt = pools.map(([ty, q]) => `${KC.AIRCRAFT[ty].name.split(' ')[0]} ${q.ready}${q.rearm.length ? '+' + q.rearm.length : ''}`).join(' ');
+            this.label(txt, p.x + 9, p.y - 1, COL.dim, 'left', 9);
+          }
+        }
+        if (ui.sel && ui.sel.ref === b) { c.globalAlpha = 1; c.strokeStyle = COL.white; c.strokeRect(p.x - 7, p.y - 7, 14, 14); }
         c.globalAlpha = 1;
       }
     }
@@ -366,7 +384,7 @@
         const col = COL[side];
         if (u.kind === 'radar') { if (ui.sel && ui.sel.ref === u) this.circle(u.x, u.y, u.range, col, 0.4, [2, 6], 0.03); }
         else if (u.kind === 'sam') {
-          if (!spectator) this.circle(u.x, u.y, WEAPONS[u.def.weapon].range * 0.7, COL.site, 0.22, [3, 5], 0.018);
+          if (!spectator && !u.dead && u.radarOn) this.circle(u.x, u.y, WEAPONS[u.def.weapon].range * 0.7, COL.site, 0.22, [3, 5], 0.018);
         } else if (u.kind === 'air' && u.state === 'air') {
           if (u.def.role === 'aew') {
             const s = this.toScreen(u.x, u.y), r = u.def.radar * this.view.scale;
@@ -391,7 +409,7 @@
       if (spectator) return;
       // Enemy SAM threat rings that we know about.
       for (const tr of sim.tracks[side].values()) {
-        if (tr.kind === 'sam') this.circle(tr.x, tr.y, WEAPONS[tr.ref.def.weapon].range * 0.7, COL.site, 0.35, [3, 5], 0.03);
+        if (tr.kind === 'sam' && !tr.ref.dead) this.circle(tr.x, tr.y, WEAPONS[tr.ref.def.weapon].range * 0.7, COL.site, 0.35, [3, 5], 0.03);
       }
     }
 
@@ -402,7 +420,7 @@
       for (const u of sim.units) {
         if (side && u.side !== side) continue;
         let R, period;
-        if (u.kind === 'radar') { R = u.range; period = 6; }
+        if (u.kind === 'radar') { if (u.dead || !u.radarOn) continue; R = u.range; period = 6; }
         else if (u.kind === 'air' && u.state === 'air' && u.def.role === 'aew') { R = u.def.radar; period = 5; }
         else continue;
         const s = this.toScreen(u.x, u.y), r = R * this.view.scale;
@@ -447,14 +465,19 @@
       } else if (o && o.type === 'orbit') {
         dashTo(o.x, o.y);
         this.circle(o.x, o.y, o.r, col, 0.5, [2, 3]);
-      } else if (o && o.type === 'strike' && o.list.length) {
-        const s = sim.site(o.list[0].site);
-        dashTo(s.x, s.y, COL.site);
-        const wk = sim.strikeWeapon(sel);
-        if (wk) this.circle(s.x, s.y, WEAPONS[wk].range * 0.9, COL.site, 0.4, [6, 6]);
+      } else if (o && (o.type === 'strike' || o.type === 'drone') && o.list.length) {
+        const s = sim.refFor(o.list[0].kind, o.list[0].id);
+        if (s) {
+          dashTo(s.x, s.y, COL.site);
+          const wk = sim.strikeWeapon(sel);
+          if (wk) this.circle(s.x, s.y, WEAPONS[wk].range * 0.9, COL.site, 0.4, [6, 6]);
+        }
+      } else if (o && o.type === 'sead') {
+        dashTo(o.x, o.y);
+        this.circle(o.x, o.y, 45, COL.site, 0.35, [2, 4]);
       } else if (o && o.type === 'rtb') {
-        const b = sim.base(sel.base);
-        dashTo(b.x, b.y);
+        const b = sim.base(o.base || sel.base);
+        if (b) dashTo(b.x, b.y);
       }
       // Weapon reach: best BVR missile's kinematic range and a rough no-escape range.
       let best = null;
@@ -540,7 +563,11 @@
       c.strokeStyle = col; c.fillStyle = col; c.lineWidth = 1.5;
       if (opts && opts.glow) { c.shadowColor = col; c.shadowBlur = 8; }
       if (opts && opts.dashed) c.setLineDash([2, 2]);
-      if (kind === 'air' && role === 'fighter') {
+      if (kind === 'air' && role === 'drone') {
+        c.rotate(hdg);
+        c.beginPath(); c.moveTo(-4, -4); c.lineTo(4, 4); c.moveTo(4, -4); c.lineTo(-4, 4); c.stroke();
+        c.beginPath(); c.moveTo(0, -6); c.lineTo(0, -3); c.stroke();
+      } else if (kind === 'air' && role === 'fighter') {
         c.rotate(hdg);
         c.beginPath(); c.moveTo(0, -8); c.lineTo(5.5, 6); c.lineTo(0, 3); c.lineTo(-5.5, 6); c.closePath();
         if (opts && opts.hollow) c.stroke(); else c.fill();
@@ -582,7 +609,8 @@
           c.lineTo(p.x + Math.sin(u.hdg) * (9 + L), p.y - Math.cos(u.hdg) * (9 + L)); c.stroke();
           c.globalAlpha = 1;
         }
-        this.glyph(u.kind, u.def.role, p.x, p.y, u.hdg, col, { hollow: u.kind === 'air' && !u.radarOn, glow: u.kind === 'air' });
+        if (u.dead) { this.wreck(p, u.callsign); continue; }
+        this.glyph(u.kind, u.def.role, p.x, p.y, u.hdg, col, { hollow: u.kind === 'air' && !u.radarOn, glow: u.kind === 'air' && !u.ghost, dashed: u.ghost || (u.kind !== 'air' && !u.radarOn) });
         if (u.kind === 'air' && u.defending) this.label(u.defMode === 'notch' ? 'NOTCH' : 'DRAG', p.x - 11, p.y + 14, COL.site, 'right', 9);
         if (sel) {
           c.strokeStyle = COL.white; c.lineWidth = 1;
@@ -595,11 +623,68 @@
         }
         if (u.kind === 'air' && (showLabels || sel)) {
           const tag = `${u.callsign}${u.count > 1 ? ' ×' + u.count : ''}`;
-          this.label(tag, p.x + 11, p.y - 5, col, 'left', 10);
+          this.label(tag, p.x + 11, p.y - 5, u.ghost ? COL.dim : col, 'left', 10);
           if (sel || this.view.scale > 1.1) this.label(u.def.name, p.x + 11, p.y + 6, COL.dim, 'left', 9);
         } else if (u.kind !== 'air' && (this.view.scale > 0.9 || sel)) {
           this.label(u.callsign, p.x + 9, p.y, COL.dim, 'left', 9);
         }
+      }
+    }
+
+    wreck(p, name) {
+      const c = this.ctx;
+      c.strokeStyle = COL.dim; c.lineWidth = 1.5;
+      c.beginPath(); c.moveTo(p.x - 5, p.y - 5); c.lineTo(p.x + 5, p.y + 5); c.moveTo(p.x + 5, p.y - 5); c.lineTo(p.x - 5, p.y + 5); c.stroke();
+      if (this.view.scale > 0.6) this.label(name + ' (destroyed)', p.x + 9, p.y, COL.dim, 'left', 9);
+    }
+    // Active barrage jamming areas (both sides can see the noise).
+    drawJamming(sim) {
+      const c = this.ctx;
+      if (!sim.ew) return;
+      for (const side of ['IN', 'PK']) {
+        const e = sim.ew[side].barrage;
+        if (!(e.until > sim.t)) continue;
+        const p = this.toScreen(e.x, e.y), r = KC.EW.barrage.r * this.view.scale;
+        const now = performance.now() / 1000;
+        c.save();
+        c.strokeStyle = COL[side];
+        c.globalAlpha = 0.5;
+        c.setLineDash([3, 6]); c.lineDashOffset = -now * 30;
+        c.beginPath(); c.arc(p.x, p.y, r, 0, Math.PI * 2); c.stroke();
+        c.globalAlpha = 0.08; c.fillStyle = COL[side];
+        c.beginPath(); c.arc(p.x, p.y, r, 0, Math.PI * 2); c.fill();
+        c.globalAlpha = 0.35;
+        for (let i = 0; i < 40; i++) {
+          const a = (i * 2.4 + now * 3) % (Math.PI * 2), d = r * (((i * 37) % 100) / 100);
+          c.fillRect(p.x + Math.cos(a) * d, p.y + Math.sin(a) * d, 2, 1);
+        }
+        c.restore();
+        this.label('JAMMING', p.x, p.y - r - 8, COL[side], 'center', 9);
+      }
+    }
+    // Priority targets: red reticles on ours to hit, amber rings on our assets to defend.
+    drawObjectives(sim, ui) {
+      const c = this.ctx;
+      const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 350);
+      for (const o of sim.objectives[ui.side]) {
+        if (!o.ref) continue;
+        const p = this.toScreen(o.ref.x, o.ref.y);
+        const r = 13 + pulse * 2;
+        c.strokeStyle = o.hit ? COL.dim : COL.site; c.lineWidth = 1.3; c.globalAlpha = 0.9;
+        c.beginPath(); c.arc(p.x, p.y, r, 0, Math.PI * 2); c.stroke();
+        c.beginPath();
+        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { c.moveTo(p.x + dx * (r - 4), p.y + dy * (r - 4)); c.lineTo(p.x + dx * (r + 5), p.y + dy * (r + 5)); }
+        c.stroke();
+        c.globalAlpha = 1;
+        if (o.hit) this.label('HIT', p.x, p.y - r - 8, COL.site, 'center', 9);
+      }
+      for (const o of sim.objectives[KC.util.ENEMY[ui.side]]) {
+        if (!o.ref) continue;
+        const p = this.toScreen(o.ref.x, o.ref.y);
+        c.strokeStyle = o.hit ? COL.site : COL.hot; c.globalAlpha = 0.7; c.setLineDash([4, 3]);
+        c.beginPath(); c.arc(p.x, p.y, 15, 0, Math.PI * 2); c.stroke();
+        c.setLineDash([]); c.globalAlpha = 1;
+        if (this.view.scale > 0.5) this.label(o.hit ? 'HIT' : 'DEFEND', p.x, p.y + 24, o.hit ? COL.site : COL.hot, 'center', 8);
       }
     }
 
@@ -618,11 +703,13 @@
         if (e.kind === 'air') {
           this.glyph('air', e.def.role, p.x, p.y, e.hdg, col, { hollow: true, dashed: esm, glow: !esm && !stale });
           if (esm) { c.strokeStyle = col; c.beginPath(); c.arc(p.x, p.y, 10, 0, Math.PI * 2); c.setLineDash([2, 3]); c.stroke(); c.setLineDash([]); }
-        } else this.glyph(e.kind, null, p.x, p.y, 0, col, {});
+        } else if (e.dead) { this.wreck(p, e.callsign); c.globalAlpha = 1; continue; }
+        else this.glyph(e.kind, null, p.x, p.y, 0, col, {});
         const sel = ui.sel && ui.sel.ref === e;
         if (sel) { c.strokeStyle = COL.white; c.strokeRect(p.x - 11, p.y - 11, 22, 22); }
         if (e.kind === 'air') {
-          const name = esm ? `${e.def.name}?` : `${e.def.name}${e.count > 1 ? ' ×' + e.count : ''}`;
+          const n = tr.count || e.count;
+          const name = esm ? `${e.def.name}?` : `${e.def.name}${n > 1 ? ' ×' + n : ''}`;
           if (this.view.scale > 0.3 || sel) this.label(`T${tr.num} ${name}`, p.x + 11, p.y - 5, col, 'left', 10);
         } else if (this.view.scale > 0.9 || sel) this.label(e.callsign, p.x + 9, p.y, COL.dim, 'left', 9);
         c.globalAlpha = 1;

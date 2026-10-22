@@ -39,26 +39,27 @@
     <div id="panel" class="hidden"></div>
     <div id="hint"></div>
 
+    <div id="ewbar" class="hidden">
+      <button data-ew="jam" title="Jam the enemy data link for 75 s"><b>LINK JAM</b><small>READY</small><i></i></button>
+      <button data-ew="barrage" title="Degrade enemy radars over an area for 60 s"><b>BARRAGE</b><small>READY</small><i></i></button>
+      <button data-ew="decoy" title="Launch decoys that look like a pair of fighters"><b>DECOYS</b><small>READY</small><i></i></button>
+    </div>
+    <div id="card" class="hidden"></div>
+    <div id="replaybar" class="hidden">
+      <span class="rp-tag">REPLAY</span>
+      <button id="rp-play">II</button>
+      <input id="rp-slider" type="range" min="0" max="1" value="0" aria-label="Replay position">
+      <span id="rp-time"></span>
+      <button id="rp-exit">EXIT</button>
+    </div>
+
     <div id="menu" class="overlay menu">
       <div class="card wide hud">
         <div class="boot" id="boot" aria-hidden="true"></div>
         <div class="title" data-text="KILLCHAIN">KILL<span>CHAIN</span></div>
-        <div class="sub">An air-war simulation inspired by the India–Pakistan air battle of 6–7 May 2025</div>
+        <div class="sub">An air-war simulation inspired by the India–Pakistan air war of 6–10 May 2025</div>
         <div class="live"><i></i> LIVE: AI vs AI battle running behind this menu</div>
-        <div class="sides">
-          <button class="side IN" data-side="IN">
-            <b>COMMAND INDIA</b>
-            <span>Strike package. Get SCALP-EG and SPICE weapons onto 5 target sites while losing as few jets as possible.</span>
-          </button>
-          <button class="side PK" data-side="PK">
-            <b>COMMAND PAKISTAN</b>
-            <span>Air defence. Use your AEW&amp;C picture and PL-15s to shoot down strike aircraft and intercept cruise missiles.</span>
-          </button>
-        </div>
-        <button class="side TR" id="menu-training">
-          <b>TRAINING: MISSILE EVASION</b>
-          <span>Four short lessons: the long shot, the short shot, the silent data-link shot, and taking your own shot. Start here.</span>
-        </button>
+        <div id="menu-modes" class="modes"></div>
         <button id="menu-help" class="link">HOW TO PLAY</button>
         <p class="fine">A simplified, unofficial game. Performance figures are open-source estimates; results come from the simulation each time you play, not from either side's claims. Not a historical record.</p>
       </div>
@@ -74,11 +75,23 @@
           <li><b>Support.</b> After firing a radar-guided missile, your jet "cranks", turning 50° off to keep the target in its radar. If it turns away too early, the missile goes blind.</li>
           <li><b>Survive.</b> When warned, jets turn away (drag), jam and drop chaff. Radar emissions give you away: enemies detect radars further than radars detect jets.</li>
         </ol>
+        <div class="h2">RUNNING THE WAR</div>
+        <ul class="controls">
+          <li><b>Air bases.</b> Every jet starts on the ground. Tap a base (□ with a number) to see its aircraft, pick a <b>loadout</b> (AIR for missiles, STRIKE for ground attack) and <b>DEPLOY</b> a flight or <b>SCRAMBLE ALL</b>.</li>
+          <li><b>Limits.</b> Weapons come from a national stock. Fuel is limited: low fuel means <b>BINGO</b> and the flight goes home. Landing refuels and re-arms (about 7 minutes). Only so many jets can be airborne at once (India 24, Pakistan 20).</li>
+          <li><b>Strikes.</b> Select a strike flight or drones, then tap an enemy base, SAM site, radar or target. Hits on a base close its runway at 60% damage and can destroy jets parked there. Jets heading home divert elsewhere.</li>
+          <li><b>Drones.</b> Harop hunts radars by their emissions (turn a SAM's radar OFF to hide it). Swarm drones are cheap: they soak up expensive SAM missiles.</li>
+          <li><b>EW.</b> <b>LINK JAM</b> cuts the enemy's data link, so silent shots don't work. <b>BARRAGE</b> blinds enemy radars over an area. <b>DECOYS</b> send fake fighters that draw missiles. Each has a cooldown.</li>
+          <li><b>Decisions.</b> Cards pop up at key moments, with a 10-second timer.</li>
+          <li><b>Fog of war.</b> Kills are only <b>claimed</b> until the debrief reveals the truth.</li>
+          <li><b>Escalation.</b> Every strike and kill raises escalation. At <b>100%</b> the crisis spirals and <b>both sides lose</b>.</li>
+          <li><b>Replay.</b> After the night, watch the whole battle from both sides.</li>
+        </ul>
         <div class="h2">CONTROLS</div>
         <ul class="controls">
           <li><b>Tap</b> your flight to select it. <b>Tap the map</b> to send it there (it orbits on arrival).</li>
-          <li>With a flight selected, <b>tap an enemy track</b> to attack it, or <b>tap a red target site</b> (India) to strike it.</li>
-          <li><b>Tap an airbase</b> to scramble reserve flights.</li>
+          <li>With a flight selected, <b>tap an enemy track</b> to attack it, or <b>tap an enemy base, SAM, radar or target</b> to strike it.</li>
+          <li><b>Tap an airbase</b> to deploy aircraft. <b>RTB</b> sends a flight home to refuel and re-arm.</li>
           <li><b>Drag</b> to pan, <b>pinch or scroll</b> to zoom. Speed buttons are at the top. On a keyboard: Space pauses, 1–5 set speed, Esc deselects.</li>
           <li><b>ROE FREE</b>: the flight fires on its own at good-quality targets. <b>HOLD</b>: it only fires when you order an attack.</li>
           <li><b>BREAK</b> (B): turn tail and run at full speed, so the missile burns its energy chasing you. Best against long shots.</li>
@@ -88,7 +101,7 @@
         </ul>
         <div class="h2">SYMBOLS</div>
         <ul class="controls">
-          <li>▲ filled: radar ON · △ hollow: radar silent · dashed: passive (emission-only) track · ◇ target site · □ airbase · ▣ SAM site</li>
+          <li>▲ filled: radar ON · △ hollow: radar silent · dashed: passive (emission-only) track · ◇ target site · □ airbase (number = jets ready) · ▣ SAM site · ✕ drones · ⊕ red reticle: your priority target · amber ring: asset to defend</li>
           <li>Red line from a missile to your jet: it can still reach you. Grey dashed line: it is <b>losing energy</b> and will fall short if you keep running. The label shows its Mach number and distance.</li>
         </ul>
         <button class="primary" id="help-close">GOT IT</button>
@@ -105,6 +118,7 @@
   <script src="js/geo.js"></script>
   <script src="js/data.js"></script>
   <script src="js/sim.js"></script>
+  <script src="js/ai.js"></script>
   <script src="js/render.js"></script>
   <script src="js/ui.js"></script>
   <script src="js/training.js"></script>

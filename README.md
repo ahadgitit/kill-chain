@@ -12,21 +12,21 @@ It works on desktop and mobile (touch), with no install and no build step.
 ## How a night works
 
 - **Air bases.** Each base hosts one aircraft type, using real names and locations (India: Ambala Rafale, Halwara/Sirsa/Jodhpur Su-30MKI, Adampur/Srinagar MiG-29, Pathankot Mirage 2000, Bathinda Netra, Agra Phalcon, Amritsar Harop; Pakistan: Minhas J-10CE, Rafiqui/Peshawar JF-17, Mushaf/Jacobabad F-16, Nur Khan Erieye, Masroor ZDK-03, Sialkot drones). Other fields are divert bases and targets.
-- **Everything starts on the ground.** Tap a base to see its aircraft, choose a **loadout preset** (AIR / STRIKE / PRECISION) and **DEPLOY n** or **SCRAMBLE ALL**.
+- **Missions, not micromanagement.** Everything starts on the ground. Tap a base, set the flight size and pick a mission: **PATROL**, **STRIKE** (tap a target, choose a time on target, optionally add an escort), **ESCORT**, **AEW&C ORBIT**, **HUNT RADARS** or **DRONE ATTACK**. The AI flies it: it fights, defends itself, goes home at bingo fuel, and for patrols and orbits launches relief flights. Strikes given the same time on target arrive together. The ▤ list shows every mission.
 - **Limits.**
-  - **Weapons:** come from national stocks.
+  - **Weapons:** the decisive ones (Meteor, SCALP-EG, BrahMos-A, PL-15E, CM-400AKG) come from limited national stocks.
   - **Fuel:** limited. At BINGO a flight returns to base.
   - **Landing:** refuels and re-arms (about 7 minutes).
   - **Airborne cap:** at most 24 Indian and 20 Pakistani aircraft in the air at once.
 - **Strikes.** Hits on a base close its runway at 60% damage, so jets divert, and can destroy aircraft parked on it. SAM sites and radars can be destroyed.
 - **Drones.** Harop hunts radars by their emissions (switch a SAM's radar off to hide it). Swarm drones are cheap and soak up SAM missiles.
 - **Electronic warfare (on cooldowns).** LINK JAM cuts the enemy data link, BARRAGE blinds radars over an area, and DECOYS send fake fighters.
-- **Decision cards.** 10-second choices at key moments: hold to guide a missile or break, press on below bingo fuel, scramble a threatened base, fire on an enemy AEW&C, stand down at high escalation.
+- **Decision cards.** 10-second choices at key moments: scramble a threatened base's jets or keep them sheltered, stand down at high escalation.
 - **Fog of war.** Kills are only *claimed* during the night. The debrief shows claimed against confirmed.
 - **Escalation.** Strikes and kills raise a shared meter. At 100% both sides lose. Night 4 ends in a ceasefire.
 - **After-action replay.** Watch the whole night from both sides.
 - **Scoring.**
-  - 10 points per priority target hit, and 8 per enemy priority target left untouched.
+  - Every night, both sides have priority targets to attack and assets to defend. 10 points per priority target hit, and 8 per enemy priority target left untouched.
   - 6 per other base or air defence hit.
   - Kills score the aircraft's value, and ground kills half its value.
   - 3 per strike weapon intercepted, 1 per drone.

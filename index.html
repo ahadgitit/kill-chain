@@ -28,6 +28,7 @@
       </div>
       <div class="spacer"></div>
       <div id="score"></div>
+      <button id="btn-missions" class="icon" title="Missions">▤ 0</button>
       <button id="btn-autopause" class="icon on" title="Auto-pause on missile warning">⚠</button>
       <button id="btn-sensors" class="icon on" title="Show sensor coverage">◎</button>
       <button id="btn-log" class="icon" title="Event log">≡</button>
@@ -36,6 +37,7 @@
 
     <div id="ticker"></div>
     <div id="log" class="hidden"><div class="log-head">EVENT LOG <button id="log-close">✕</button></div><div id="log-body"></div></div>
+    <div id="missions" class="hidden"><div class="log-head">MISSIONS <button id="missions-close">✕</button></div><div id="missions-body"></div></div>
     <div id="panel" class="hidden"></div>
     <div id="hint"></div>
 
@@ -77,9 +79,9 @@
         </ol>
         <div class="h2">RUNNING THE WAR</div>
         <ul class="controls">
-          <li><b>Air bases.</b> Every jet starts on the ground. Tap a base (□ with a number) to see its aircraft, pick a <b>loadout</b> (AIR for missiles, STRIKE for ground attack) and <b>DEPLOY</b> a flight or <b>SCRAMBLE ALL</b>.</li>
-          <li><b>Limits.</b> Weapons come from a national stock. Fuel is limited: low fuel means <b>BINGO</b> and the flight goes home. Landing refuels and re-arms (about 7 minutes). Only so many jets can be airborne at once (India 24, Pakistan 20).</li>
-          <li><b>Strikes.</b> Select a strike flight or drones, then tap an enemy base, SAM site, radar or target. Hits on a base close its runway at 60% damage and can destroy jets parked there. Jets heading home divert elsewhere.</li>
+          <li><b>Missions.</b> Every jet starts on the ground. Tap a base (□ with a number), set the flight size, and pick a mission: <b>PATROL</b>, <b>STRIKE</b> (tap a target, choose a time on target, add an escort), <b>ESCORT</b>, <b>AEW&amp;C ORBIT</b> or a drone mission. The AI flies it: it fights, refuels, goes home, and for patrols launches relief flights. <b>▤</b> lists your missions.</li>
+          <li><b>Limits.</b> Key weapons (Meteor, SCALP, BrahMos, PL-15, CM-400) come from a limited national stock. Fuel is limited: low fuel means <b>BINGO</b> and the flight goes home. Landing refuels and re-arms (about 7 minutes). Only so many jets can be airborne at once (India 24, Pakistan 20).</li>
+          <li><b>Strikes.</b> Strikes timed with the same time on target arrive together. Hits on a base close its runway at 60% damage and can destroy jets parked there. Jets heading home divert elsewhere.</li>
           <li><b>Drones.</b> Harop hunts radars by their emissions (turn a SAM's radar OFF to hide it). Swarm drones are cheap: they soak up expensive SAM missiles.</li>
           <li><b>EW.</b> <b>LINK JAM</b> cuts the enemy's data link, so silent shots don't work. <b>BARRAGE</b> blinds enemy radars over an area. <b>DECOYS</b> send fake fighters that draw missiles. Each has a cooldown.</li>
           <li><b>Decisions.</b> Cards pop up at key moments, with a 10-second timer.</li>

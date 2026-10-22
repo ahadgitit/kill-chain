@@ -130,6 +130,7 @@
     ui.side = side;
     ui.sel = null;
     ui.ewArm = null;
+    ui.plan = null;
     ui.training = !!opts.training;
     exitReplay();
     document.body.classList.remove('in-menu');
@@ -164,10 +165,10 @@
     const bases = sim.bases.filter(b => b.side === side && Object.values(b.pools).some(p => p.ready));
     const forces = bases.map(b => Object.entries(b.pools).filter(([, p]) => p.ready).map(([ty, p]) => `${b.id}: ${p.ready} ${AIRCRAFT[ty].name}`).join(', ')).join(' · ');
     const tip = {
-      1: { IN: 'Set AMBALA to STRIKE (it already is), deploy 2 Rafales, then tap MURIDKE or BAHAWALPUR with the flight selected. PATHANKOT\'s Mirages carry short-range SPICE for KOTLI and SIALKOT (MJ).', PK: 'Get the Erieye up from NUR KHAN first, then put J-10CEs and JF-17s on patrol near Lahore and Bahawalpur. Strike flights launch from deep inside India, so watch for them early.' },
-      2: { IN: 'Launch Harops from AMRITSAR and send them near Lahore: they hunt radars on their own. Keep MiG-29s up to shoot down drone swarms.', PK: 'Launch drone swarms from SIALKOT and tap an Indian base or radar to attack it. They are slow, so send several waves. Turn SAM radars OFF if Harops are hunting them.' },
-      3: { IN: 'Expect CM-400s and H-4s against your bases. When a base is threatened, scramble its jets so they aren\'t caught on the ground.', PK: 'Set RAFIQUI and PESHAWAR to STRIKE for CM-400AKG (240 km). Use LINK JAM and DECOYS to cover the strike packages.' },
-      4: { IN: 'Set HALWARA and JODHPUR to STRIKE: each Su-30 carries one BrahMos-A (400 km). Spread them across the 7 air bases. A ceasefire comes at 45 min.', PK: 'Keep patrols up over your bases. BrahMos is fast and hard to intercept, so hit the launching Su-30s before they fire.' },
+      1: { IN: 'Tap AMBALA, then STRIKE · SCALP-EG, then tap MURIDKE. Try +ESCORT and the same time on target for a second strike on BAHAWALPUR. PATHANKOT\'s Mirages carry short-range SPICE for KOTLI and SIALKOT (MJ).', PK: 'Auto-deploy puts the Erieye and patrols up. Then plan a DRONE ATTACK from SIALKOT on UDHAMPUR. Indian strikes launch from deep inside India, so watch for them early.' },
+      2: { IN: 'Send Harops from AMRITSAR to HUNT RADARS near Lahore, and keep MiG-29 patrols up to catch drone swarms.', PK: 'Plan DRONE ATTACKs from SIALKOT in several waves. They are slow and cheap. Turn SAM radars OFF if Harops are hunting them.' },
+      3: { IN: 'Patrol over your bases. When a base is threatened, scramble its jets so they aren\'t caught on the ground. Counter-strike SIALKOT and MURID with Rafales.', PK: 'Plan STRIKE · CM-400AKG from RAFIQUI and PESHAWAR (240 km), timed together, with escorts. Use LINK JAM and DECOYS to cover them.' },
+      4: { IN: 'Plan STRIKE · BrahMos-A from HALWARA and JODHPUR (400 km), one target each, with the same time on target. A ceasefire comes at 45 min.', PK: 'Keep patrols up. BrahMos is fast and hard to intercept, so hit the launching Su-30s first. Counter-strike ADAMPUR and PATHANKOT.' },
     }[n.n][side];
     $('debrief-body').innerHTML = `
       <div class="h">NIGHT ${n.n} · ${n.title} <span class="k">${n.date}</span></div>
@@ -180,18 +181,32 @@
       <p class="k"><b>Your forces:</b> ${forces || 'none'}. Up to ${AIR_CAP[side]} aircraft can be airborne at once.</p>
       <p class="tip">💡 ${tip}</p>
       <div class="sides">
-        <button class="side ${side}" id="go-auto"><b>AUTO-DEPLOY AEW&amp;C AND PATROLS</b><span>Launch the standard AEW&amp;C orbits and combat air patrols for you. You handle strikes and everything after.</span></button>
-        <button class="side NIGHT" id="go-manual"><b>I'LL DEPLOY MYSELF</b><span>Start with everything on the ground. Tap an air base to scramble.</span></button>
+        <button class="side ${side}" id="go-auto"><b>AUTO-DEPLOY AEW&amp;C AND PATROLS</b><span>Create the standard AEW&amp;C and patrol missions for you (with relief flights). You plan the strikes.</span></button>
+        <button class="side NIGHT" id="go-manual"><b>I'LL PLAN EVERYTHING</b><span>Start with everything on the ground. Tap an air base to plan a mission.</span></button>
       </div>`;
     $('debrief').classList.remove('hidden');
     const go = auto => {
       $('debrief').classList.add('hidden');
-      if (auto) sim.commanders.push(new KC.Commander(sim, side, NIGHTS[idx].ai[side], { oneShot: true }));
+      if (auto) autoDeploy(NIGHTS[idx].ai[side], side);
       setSpeed(5);
-      hint(auto ? 'Patrols launching. Tap an air base to send more, or a flight to give it orders' : 'Tap one of your air bases (□ with a count) to scramble aircraft');
+      hint(auto ? 'Patrols launching. Tap an air base to plan a strike' : 'Tap one of your air bases (□ with a count) to plan a mission');
     };
     $('go-auto').onclick = () => go(true);
     $('go-manual').onclick = () => go(false);
+  }
+
+  // The standard AEW&C orbits and patrols for this night, as player missions.
+  function autoDeploy(plan, side) {
+    const P = (la, lo) => KC.geo.project(la, lo);
+    for (const [base, la, lo] of plan.aew || []) {
+      const b = sim.base(base);
+      sim.createMission({ side, kind: 'aew', base, type: b.home, n: 1, preset: 'AEW', at: P(la, lo) });
+    }
+    for (const [base, n, la, lo] of plan.caps || []) {
+      const b = sim.base(base);
+      sim.createMission({ side, kind: 'cap', base, type: b.home, n, preset: 'AIR', at: P(la, lo) });
+    }
+    renderMissions();
   }
 
   function showDebrief() {
@@ -421,6 +436,13 @@
   let lastBtns = '';
   function renderPanel(force) {
     const p = $('panel');
+    if (sim && ui.plan) {
+      p.classList.remove('hidden');
+      const { info, btns } = describePlan();
+      p.innerHTML = `<div class="info">${info}</div><div class="btns">${btns}</div>`;
+      lastBtns = '';
+      return;
+    }
     const ref = ui.sel && ui.sel.ref;
     const gone = !ref || (ref.kind === 'air' && ref.state !== 'air') || (ref.kind === 'cruise' && ref.dead) ||
       (ref.side !== ui.side && ref.kind !== 'site' && ref.kind !== 'base' && !sim.trackFor(ui.side, ref));
@@ -473,6 +495,26 @@
     return mine ? `<span class="tag hot">YOUR TARGET${mine.hit ? ' · HIT' : ''}</span>` : theirs ? `<span class="tag def">DEFEND${theirs.hit ? ' · HIT' : ''}</span>` : '';
   };
 
+  // Mission buttons offered for an aircraft type at one of our bases.
+  function missionButtons(b, ty) {
+    const def = AIRCRAFT[ty];
+    const btn = (kind, label, sub, preset) => `<button class="mbtn" data-act="mission" data-base="${b.id}" data-type="${ty}" data-kind="${kind}"${preset ? ` data-preset="${preset}"` : ''}><b>${label}</b><span>${sub}</span></button>`;
+    if (def.role === 'aew') return btn('aew', 'AEW&amp;C ORBIT', 'Tap a point. Relief flights keep it manned.', 'AEW');
+    if (def.role === 'drone') return def.mission === 'sead' ? btn('sead', 'HUNT RADARS', 'Tap an area. They home on emitting radars.') : btn('attack', 'DRONE ATTACK', 'Tap an enemy base, SAM or radar.');
+    let out = btn('cap', 'PATROL (CAP)', 'Tap a point. Relief flights keep it manned.', 'AIR');
+    if (sim.missions.some(m => m.side === ui.side && m.kind === 'strike' && m.status !== 'done')) out += btn('escort', 'ESCORT', 'Protect one of your strike missions.', 'AIR');
+    for (const pr of Object.keys(PRESETS[ty])) {
+      if (pr === 'AIR') continue;
+      const wk = sim.missionWeapon(ty, pr);
+      if (wk) out += btn('strike', `STRIKE · ${WEAPONS[wk].name}`, `Tap a target. Launches from ~${Math.round(WEAPONS[wk].range * 0.85)} km.`, pr);
+    }
+    return out;
+  }
+  function keyStocks() {
+    const st = sim.stocks[ui.side];
+    return Object.entries(st).map(([k, n]) => `${WEAPONS[k].name} <b>${n}</b>`).join(' · ');
+  }
+
   function describeBase(b) {
     const own = b.side === ui.side;
     const st = !sim.baseOpen(b) ? `<span class="warn">RUNWAY CLOSED · repairs ~${fmtT((b.damage - 59) / 5 * 60)}</span>`
@@ -480,10 +522,10 @@
     let info = head(`${b.id} AIR BASE`, b.side) + `<div class="row">${st} ${objFor(b)}</div>`;
     if (!own) {
       const types = Object.keys(b.pools).map(ty => AIRCRAFT[ty].name).join(', ');
-      info += `<div class="note">${types ? 'Intelligence: ' + types + ' based here.' : 'Divert airfield.'} Select a strike flight or drones, then tap this base to attack it. Hits close the runway at ${60}% damage and can destroy aircraft on the ground.</div>`;
+      info += `<div class="note">${types ? 'Intelligence: ' + types + ' based here.' : 'Divert airfield.'} Plan a STRIKE or DRONE ATTACK from one of your bases and tap this base as the target. Hits close the runway at 60% damage and can destroy aircraft on the ground.</div>`;
       return { info, btns: '' };
     }
-    info += `<div class="row"><span class="k">Airborne</span> ${sim.airborne(ui.side)} / ${AIR_CAP[ui.side]} aircraft</div>`;
+    info += `<div class="row"><span class="k">Airborne</span> ${sim.airborne(ui.side)} / ${AIR_CAP[ui.side]} · <span class="k">Key stocks</span> ${keyStocks()}</div>`;
     let btns = '';
     const types = Object.keys(b.pools);
     if (!types.length) info += `<div class="note">Divert airfield: no aircraft based here, but any of your jets can land, refuel and re-arm.</div>`;
@@ -494,21 +536,80 @@
       const key = b.id + ty;
       const nDeploy = Math.max(1, Math.min(ui.deployN[key] || (def.role === 'drone' ? 4 : def.role === 'aew' ? 1 : 2), Math.max(1, p.ready)));
       ui.deployN[key] = nDeploy;
-      const preset = b.preset[ty];
-      const per = PRESETS[ty][preset] || {};
-      const stock = sim.stocks[ui.side];
-      const perTxt = Object.entries(per).map(([k, c]) => `${WEAPONS[k].name} ×${c}${stock[k] != null ? ` <span class="k">(${stock[k]} left)</span>` : ''}`).join(' · ');
       btns += `<div class="pool">
         <div class="pool-h"><b>${def.name}</b><span>${p.ready} ready · ${p.rearm.length} re-arming${p.rearm.length ? ` (next ${fmtT(next)})` : ''} · ${up} airborne</span></div>
-        ${Object.keys(PRESETS[ty]).length > 1 ? `<div class="seg2">${Object.keys(PRESETS[ty]).map(pr => `<button data-act="preset" data-base="${b.id}" data-type="${ty}" data-p="${pr}" class="${pr === preset ? 'on' : ''}">${pr}</button>`).join('')}</div>` : ''}
-        <div class="row k">${PRESET_INFO[preset] || ''}${perTxt ? '<br>Per jet: ' + perTxt : ''}</div>
-        <div class="deploy">
+        <div class="deploy"><span class="k">Flight size</span>
           <button data-act="n-" data-key="${key}">−</button><span class="n">${nDeploy}</span><button data-act="n+" data-key="${key}" data-max="${p.ready}">+</button>
-          <button data-act="deploy" data-base="${b.id}" data-type="${ty}" ${p.ready ? '' : 'disabled'}>DEPLOY ${nDeploy}</button>
-          ${def.role !== 'drone' ? `<button data-act="scramble" data-base="${b.id}" ${p.ready ? '' : 'disabled'}>SCRAMBLE ALL</button>` : ''}
-        </div></div>`;
+          ${def.role !== 'drone' ? `<button class="small" data-act="scramble" data-base="${b.id}" ${p.ready ? '' : 'disabled'}>SCRAMBLE ALL</button>` : ''}
+        </div>
+        <div class="mgrid">${missionButtons(b, ty)}</div></div>`;
     }
     return { info, btns };
+  }
+
+  // The mission currently being planned (after a mission button, before it is confirmed).
+  function describePlan() {
+    const pl = ui.plan, def = AIRCRAFT[pl.type];
+    const title = { cap: 'PATROL', aew: 'AEW&C ORBIT', strike: 'STRIKE', escort: 'ESCORT', sead: 'HUNT RADARS', attack: 'DRONE ATTACK' }[pl.kind];
+    let info = head(`PLAN ${title}`, ui.side) + `<div class="row">${pl.n} ${def.name} from <b>${pl.base}</b>${pl.preset && pl.kind === 'strike' ? ` · ${WEAPONS[sim.missionWeapon(pl.type, pl.preset)].name}` : ''}</div>`;
+    let btns = '';
+    if (pl.kind === 'escort') {
+      const strikes = sim.missions.filter(m => m.side === ui.side && m.kind === 'strike' && m.status !== 'done');
+      info += `<div class="row">Which strike should it protect?</div>`;
+      btns += strikes.map(m => `<button data-act="escort-of" data-id="${m.id}">${m.name} → ${m.target.id}</button>`).join('');
+    } else if (!pl.target && pl.kind !== 'cap' && pl.kind !== 'aew' && pl.kind !== 'sead') {
+      info += `<div class="row warm">Tap an enemy target on the map: a red reticle, base, SAM site or radar.</div>`;
+    } else if (pl.kind === 'cap' || pl.kind === 'aew' || pl.kind === 'sead') {
+      info += `<div class="row warm">Tap the map where the ${pl.kind === 'sead' ? 'drones should hunt' : 'flight should orbit'}.</div>`;
+    } else {
+      // Strike / attack confirmation: time on target and escort.
+      const probe = { ...pl, launchAt: sim.t, tot: null };
+      const others = sim.missions.filter(m => m.side === ui.side && m.kind === 'strike' && m.status !== 'done' && (m.status === 'scheduled' || m.status === 'planned' || m.status === 'launching' || m.status === 'inbound'));
+      const asap = pl.kind === 'strike' ? sim.missionArrival(probe) : sim.t;
+      const tot = pl.tot || null;
+      info += `<div class="row">Target: <b>${pl.target.id}</b>${pl.kind === 'strike' ? ` · earliest arrival ${sim.clock(asap).slice(0, 4)}Z` : ''}</div>`;
+      if (pl.kind === 'strike') {
+        info += `<div class="row k">Time on target: pick when weapons should arrive. Strikes timed together arrive at once.</div>`;
+        btns += `<div class="seg2 wide">` +
+          [['asap', 'ASAP'], ['5', '+5 MIN'], ['10', '+10 MIN'], ['15', '+15 MIN']].map(([v, l]) => `<button data-act="tot" data-v="${v}" class="${(pl.totKey || 'asap') === v ? 'on' : ''}">${l}</button>`).join('') + `</div>`;
+        if (others.length) btns += `<div class="seg2 wide">` + others.map(m => `<button data-act="tot" data-v="m${m.id}" class="${pl.totKey === 'm' + m.id ? 'on' : ''}">WITH ${m.name}</button>`).join('') + `</div>`;
+        if (tot) info += `<div class="row">Arrive at <b>${sim.clock(tot).slice(0, 4)}Z</b>${tot < asap - 5 ? ' <span class="warn">(too soon: it will be late)</span>' : ''}</div>`;
+        const eb = escortBase(pl.base);
+        btns += `<button data-act="escort-toggle" class="${pl.escort ? 'on' : ''}" ${eb ? '' : 'disabled'}>${pl.escort ? '✓ ' : ''}+ ESCORT${eb ? ` (2 ${AIRCRAFT[eb.type].name} from ${eb.base})` : ': none ready'}</button>`;
+      }
+      btns += `<button data-act="plan-go" class="go">LAUNCH MISSION</button>`;
+    }
+    btns += `<button data-act="plan-cancel" class="danger">CANCEL</button>`;
+    return { info, btns };
+  }
+  // Nearest of our bases with two fighters ready to fly air-to-air.
+  function escortBase(fromId) {
+    const from = sim.base(fromId);
+    let best = null, bd = Infinity;
+    for (const b of sim.bases) {
+      if (b.side !== ui.side || !sim.baseOpen(b)) continue;
+      for (const [ty, p] of Object.entries(b.pools)) {
+        if (AIRCRAFT[ty].role !== 'fighter' || !PRESETS[ty].AIR || p.ready < 2) continue;
+        if (b.id === fromId && ty === ui.plan.type && p.ready < ui.plan.n + 2) continue;
+        const d = dist(b, from);
+        if (d < bd) { bd = d; best = { base: b.id, type: ty }; }
+      }
+    }
+    return best;
+  }
+  function launchPlan() {
+    const pl = ui.plan;
+    let tot = null;
+    if (pl.kind === 'strike' && pl.totKey && pl.totKey !== 'asap') tot = pl.tot;
+    const ms = sim.createMission({ side: ui.side, kind: pl.kind, base: pl.base, type: pl.type, n: pl.n, preset: pl.preset, at: pl.at, target: pl.target, tot, escortOf: pl.escortOf });
+    if (pl.escort) {
+      const eb = escortBase(pl.base);
+      if (eb) sim.createMission({ side: ui.side, kind: 'escort', base: eb.base, type: eb.type, n: 2, preset: 'AIR', escortOf: ms.id });
+    }
+    ui.plan = null;
+    if (ms.unit && ms.unit.state === 'air') select(ms.unit); else select(null);
+    hint(`${ms.name}: ${ms.status === 'scheduled' ? `takes off at ${sim.clock(ms.launchAt).slice(0, 4)}Z` : ms.status.startsWith('waiting') ? ms.status : 'launching'}. The AI flies it. Track it under MISSIONS (▤).`);
+    renderMissions();
   }
 
   function describe(ref) {
@@ -561,7 +662,7 @@
     const fuelPct = Math.round(100 * Math.min(1, u.fuel / def.fuel));
     const rangeKm = Math.round(u.fuel * def.speed);
     const info = head(`${u.callsign} · ${def.name}${u.count > 1 ? ' ×' + u.count : ''}`, u.side) +
-      `<div class="row">${status(u)}${u.bingo ? ' · <span class="warn">BINGO</span>' : ''}</div>` +
+      `<div class="row">${status(u)}${u.bingo ? ' · <span class="warn">BINGO</span>' : ''}${u.mission ? ` · <span class="k">mission</span> ${u.mission.name}` : ''}</div>` +
       (def.role === 'aew' ? '' : wpnRows(u.wpn)) +
       `<div class="row"><span class="k">Radar</span> ${def.role === 'aew' ? 'ON (AEW&C)' : u.radarOn ? 'ON, emitting' : 'OFF, silent'}` +
       ` · <span class="k">Link</span> ${def.linked ? 'on net' : '<span class="warn">none</span>'}` +
@@ -576,7 +677,7 @@
     const md = u.manualDef && u.manualDef.mode;
     btns += `<button data-act="break" class="${md === 'drag' ? 'on' : ''}">BREAK</button>`;
     if (def.role === 'fighter') btns += `<button data-act="notch" class="${md === 'notch' ? 'on' : ''}">NOTCH</button>`;
-    btns += `<button data-act="rtb" class="danger">RTB</button>`;
+    btns += `<button data-act="rtb" class="danger">${u.mission && u.mission.repeat ? 'RTB (relief launches)' : 'RTB'}</button>`;
     return { info, btns };
   }
 
@@ -612,25 +713,32 @@
     if (!b || !sim) return;
     const ref = ui.sel && ui.sel.ref;
     const act = b.dataset.act;
-    if (act === 'close') { select(null); return; }
-    if (act === 'preset') {
-      sim.base(b.dataset.base).preset[b.dataset.type] = b.dataset.p;
-      hint(`${b.dataset.base}: ${AIRCRAFT[b.dataset.type].name}s will take off with the ${b.dataset.p} loadout`);
+    if (act === 'close') { ui.plan = null; select(null); return; }
+    if (act === 'mission') {
+      const key = b.dataset.base + b.dataset.type;
+      ui.plan = { base: b.dataset.base, type: b.dataset.type, kind: b.dataset.kind, preset: b.dataset.preset || null, n: ui.deployN[key] || 2, totKey: 'asap' };
+      hint({ cap: 'Tap the map where the patrol should orbit', aew: 'Tap the map where the AEW&C should orbit', sead: 'Tap the area where the Harops should hunt',
+        strike: 'Tap an enemy target: site, base, SAM or radar', attack: 'Tap an enemy base, SAM or radar', escort: 'Choose the strike to escort' }[ui.plan.kind]);
       renderPanel(true); return;
     }
+    if (act === 'plan-cancel') { ui.plan = null; renderPanel(true); return; }
+    if (act === 'escort-of') { ui.plan.escortOf = +b.dataset.id; launchPlan(); return; }
+    if (act === 'escort-toggle') { ui.plan.escort = !ui.plan.escort; renderPanel(true); return; }
+    if (act === 'tot') {
+      const v = b.dataset.v, pl = ui.plan;
+      pl.totKey = v;
+      const asap = sim.missionArrival({ ...pl, launchAt: sim.t });
+      if (v === 'asap') pl.tot = null;
+      else if (v[0] === 'm') { const m = sim.missions.find(x => x.id === +v.slice(1)); pl.tot = m ? (m.tot || sim.missionArrival(m)) : null; }
+      else pl.tot = Math.max(asap, sim.t + (+v) * 60 + (asap - sim.t));
+      renderPanel(true); return;
+    }
+    if (act === 'plan-go') { launchPlan(); return; }
     if (act === 'n-' || act === 'n+') {
       const k = b.dataset.key;
       ui.deployN[k] = Math.max(1, (ui.deployN[k] || 2) + (act === 'n+' ? 1 : -1));
       if (act === 'n+' && b.dataset.max) ui.deployN[k] = Math.min(ui.deployN[k], Math.max(1, +b.dataset.max));
       renderPanel(true); return;
-    }
-    if (act === 'deploy') {
-      const key = b.dataset.base + b.dataset.type;
-      const u = sim.launchFlight(b.dataset.base, b.dataset.type, ui.deployN[key] || 2);
-      if (typeof u === 'string') { hint(u); return; }
-      select(u);
-      hint(`${u.callsign} airborne. ${sim.strikeWeapon(u) ? 'Tap a target to strike it, or the map to move.' : sim.isDrone(u) ? 'Tap a target or the map.' : 'Tap the map to send it on patrol.'}`);
-      return;
     }
     if (act === 'scramble') {
       const n = sim.scrambleAll(sim.base(b.dataset.base), false);
@@ -645,6 +753,7 @@
     if (!ref || ref.kind !== 'air') return;
     if (act === 'radar') {
       ref.radarOn = !ref.radarOn;
+      ref.radarManual = true;
       hint(ref.radarOn ? `${ref.callsign} radar ON: it can see and guide missiles, but enemy RWR/ESM can detect it`
         : `${ref.callsign} radar OFF: silent, relying on the data link`);
     } else if (act === 'roe') {
@@ -702,6 +811,7 @@
   function onTap(sx, sy) {
     if (!sim || replay) return;
     const w = R.toWorld(sx, sy);
+    if (ui.plan) { placePlan(sx, sy, w); return; }
     if (ui.ewArm) {
       const kind = ui.ewArm;
       ui.ewArm = null;
@@ -751,6 +861,54 @@
     }
     select(null);
   }
+
+  function placePlan(sx, sy, w) {
+    const pl = ui.plan;
+    if (pl.kind === 'cap' || pl.kind === 'aew' || pl.kind === 'sead') {
+      pl.at = { x: w.x, y: w.y };
+      ui.marks.push({ x: w.x, y: w.y, t: performance.now() / 1000 });
+      if (KC.geo.sideOf(w.x, w.y) !== ui.side && pl.kind !== 'sead') hint('That point is in enemy airspace: AI flights stay on your side of the border');
+      launchPlan();
+      return;
+    }
+    if (pl.kind === 'strike' || pl.kind === 'attack') {
+      const hit = pick(sx, sy);
+      const ok = hit && hit.ref.side !== ui.side && (hit.kind === 'site' || hit.kind === 'ebase' || (hit.kind === 'enemy' && (hit.ref.kind === 'sam' || hit.ref.kind === 'radar')));
+      if (!ok) { hint('Tap an enemy target: a red reticle, base, SAM site or radar'); return; }
+      pl.target = { kind: hit.ref.kind, id: sim.targetId(hit.ref) };
+      if (pl.kind === 'attack') { launchPlan(); return; }
+      renderPanel(true);
+    }
+  }
+
+  // ---------- missions list ----------
+  function renderMissions() {
+    const el = $('missions-body');
+    if (!el || !sim) return;
+    const list = sim.missions.filter(m => m.side === ui.side && m.status !== 'done');
+    $('btn-missions').textContent = `▤ ${list.length}`;
+    if ($('missions').classList.contains('hidden')) return;
+    el.innerHTML = list.length ? list.map(m => {
+      const tgt = m.target ? ` → ${m.target.id}` : m.kind === 'escort' ? ` → ${(sim.missions.find(x => x.id === m.escortOf) || {}).name || ''}` : '';
+      const when = m.status === 'scheduled' ? ` (${sim.clock(m.launchAt).slice(0, 4)}Z)` : '';
+      return `<div class="mrow" data-id="${m.id}"><span><b>${m.name}</b> ${m.n}× ${AIRCRAFT[m.type].name} · ${m.base}${tgt}<br><span class="k">${m.status}${when}${m.repeat ? ' · relief on' : ''}</span></span>` +
+        `${m.kind === 'cap' || m.kind === 'aew' ? `<button data-mact="repeat" class="${m.repeat ? 'on' : ''}" title="Relief flights">⟳</button>` : ''}<button data-mact="cancel" title="Cancel mission">✕</button></div>`;
+    }).join('') : '<div class="k">No missions yet. Tap one of your air bases to plan one.</div>';
+  }
+  $('btn-missions').onclick = () => { $('missions').classList.toggle('hidden'); $('btn-missions').classList.toggle('on'); renderMissions(); };
+  $('missions-close').onclick = () => { $('missions').classList.add('hidden'); $('btn-missions').classList.remove('on'); };
+  $('missions-body').addEventListener('click', ev => {
+    const row = ev.target.closest('.mrow');
+    if (!row || !sim) return;
+    const ms = sim.missions.find(m => m.id === +row.dataset.id);
+    const act = ev.target.closest('[data-mact]');
+    if (act && act.dataset.mact === 'cancel') { sim.cancelMission(ms); renderMissions(); return; }
+    if (act && act.dataset.mact === 'repeat') { ms.repeat = !ms.repeat; renderMissions(); return; }
+    const u = ms.unit && ms.unit.state === 'air' ? ms.unit : null;
+    const focus = u || sim.base(ms.base);
+    select(focus);
+    R.flyTo({ cx: focus.x, cy: focus.y, scale: Math.max(R.view.scale, 0.8) }, 600);
+  });
 
   // ---------- pointer input: tap, drag-pan, pinch-zoom, wheel ----------
   const ptrs = new Map();
@@ -811,7 +969,7 @@
     if (e.code === 'Space') { e.preventDefault(); if (replay) replay.playing = !replay.playing; else setSpeed(ui.speed ? 0 : ui.lastSpeed || 5); }
     const map = { Digit1: 0, Digit2: 1, Digit3: 5, Digit4: 15, Digit5: 40 };
     if (e.code in map) setSpeed(map[e.code]);
-    if (e.code === 'Escape') { ui.ewArm = null; select(null); }
+    if (e.code === 'Escape') { ui.ewArm = null; ui.plan = null; select(null); }
     const ref = ui.sel && ui.sel.ref;
     if ((e.code === 'KeyB' || e.code === 'KeyN') && ref && ref.kind === 'air' && ref.side === ui.side && ref.state === 'air' && !sim.isDrone(ref)) {
       if (e.code === 'KeyB' || ref.def.role === 'fighter') defend(ref, e.code === 'KeyB' ? 'drag' : 'notch');
@@ -886,7 +1044,7 @@
         pumpEvents();
         tickCard();
         panelTimer -= dt;
-        if (panelTimer <= 0) { renderPanel(false); updateTop(); panelTimer = 0.25; }
+        if (panelTimer <= 0) { if (!ui.plan) renderPanel(false); updateTop(); renderMissions(); panelTimer = 0.25; }
         if (KC.training && ui.training) KC.training.tick();
         if (sim.over && !debriefShown && !ui.training) { renderPanel(false); updateTop(); showDebrief(); }
       }
@@ -906,6 +1064,7 @@
     $('panel').classList.add('hidden');
     $('debrief').classList.add('hidden');
     $('ewbar').classList.add('hidden');
+    $('missions').classList.add('hidden');
     $('menu').classList.remove('hidden');
     menuHome();
     bootText();

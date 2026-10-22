@@ -111,11 +111,12 @@
     SEAD: 'Hunts enemy radars.', ATTACK: 'One-way attack on a ground target.',
   };
 
-  // National weapon stocks. Jets draw from these when they take off; unused
-  // weapons go back when they land. In a campaign, stocks carry over between nights.
+  // National stocks of the decisive weapons only (everything else is plentiful).
+  // Jets draw from these when they take off; unused weapons go back when they land.
+  // In a campaign, stocks carry over between nights.
   const STOCKS = {
-    IN: { METEOR: 48, MICA: 120, MICAIR: 90, SCALP: 28, HAMMER: 72, R77: 220, R73: 160, BRAHMOS: 20, SPICE: 28 },
-    PK: { PL15: 72, PL10: 90, SD10: 150, PL5: 150, AIM120: 60, AIM9X: 60, CM400: 18, H4: 30, LS6: 40 },
+    IN: { METEOR: 40, SCALP: 24, BRAHMOS: 16 },
+    PK: { PL15: 60, CM400: 14 },
   };
 
   // Maximum manned aircraft airborne at once (sortie generation / airspace control).
@@ -179,10 +180,10 @@
   const NIGHTS = [
     {
       n: 1, title: 'OPENING STRIKES', date: '6–7 MAY 2025', start: { h: 19, m: 15 }, duration: 50 * 60, sites: true,
-      summary: 'India strikes five sites across the border. Pakistan defends.',
+      summary: 'India strikes five sites across the border. Pakistan defends and hits back at forward Indian positions.',
       targets: {
         IN: [T('site', 'BAHAWALPUR'), T('site', 'MURIDKE'), T('site', 'SIALKOT (MJ)'), T('site', 'KOTLI'), T('site', 'MUZAFFARABAD')],
-        PK: [],
+        PK: [T('base', 'UDHAMPUR'), T('radar', 'GR-AMRITSAR')],
       },
       ai: {
         IN: {
@@ -200,6 +201,7 @@
         PK: {
           aew: [['NUR KHAN', 32.75, 72.95], ['MASROOR', 26.2, 69.0]],
           caps: [['MINHAS', 2, 32.70, 73.95], ['MINHAS', 2, 31.75, 73.85], ['RAFIQUI', 2, 30.40, 73.10], ['RAFIQUI', 2, 29.30, 72.10], ['MUSHAF', 2, 33.40, 73.55]],
+          drones: [{ t: 900, base: 'SIALKOT', n: 8, mode: 'attack', list: [T('base', 'UDHAMPUR'), T('radar', 'GR-AMRITSAR')] }],
         },
       },
     },
@@ -229,15 +231,17 @@
     },
     {
       n: 3, title: 'RETALIATION', date: '9–10 MAY 2025', start: { h: 22, m: 0 }, duration: 50 * 60,
-      summary: 'Pakistan goes on the offensive against Indian air bases and the S-400. India defends.',
+      summary: 'Pakistan goes on the offensive against Indian air bases and the S-400. India defends and counter-strikes.',
       targets: {
-        IN: [],
+        IN: [T('base', 'SIALKOT'), T('radar', 'GR-LAHORE'), T('base', 'MURID')],
         PK: [T('base', 'ADAMPUR'), T('base', 'UDHAMPUR'), T('base', 'PATHANKOT'), T('base', 'BATHINDA'), T('base', 'SIRSA'), T('sam', 'SUDARSHAN')],
       },
       ai: {
         IN: {
           aew: [['BATHINDA', 30.60, 75.85], ['AGRA', 29.30, 76.60]],
           caps: [['ADAMPUR', 2, 31.90, 75.30], ['HALWARA', 2, 31.20, 75.00], ['SIRSA', 2, 29.90, 74.50], ['SRINAGAR', 2, 33.50, 74.90], ['AMBALA', 2, 32.30, 75.40, 'AIR']],
+          strikes: [{ t: 900, base: 'AMBALA', n: 2, preset: 'STRIKE', list: [T('base', 'SIALKOT'), T('base', 'MURID')] }],
+          drones: [{ t: 300, base: 'AMRITSAR', n: 6, mode: 'sead', at: [31.40, 74.10] }],
         },
         PK: {
           aew: [['NUR KHAN', 32.75, 72.95], ['MASROOR', 26.2, 69.0]],
@@ -254,10 +258,10 @@
     },
     {
       n: 4, title: 'AIRBASE STRIKES', date: '10 MAY 2025', start: { h: 0, m: 0 }, duration: 50 * 60, ceasefireAt: 45 * 60,
-      summary: 'India strikes Pakistani air bases with BrahMos and SCALP. A ceasefire is coming.',
+      summary: 'India strikes Pakistani air bases with BrahMos and SCALP; Pakistan hits back at Indian bases. A ceasefire is coming.',
       targets: {
         IN: [T('base', 'NUR KHAN'), T('base', 'RAFIQUI'), T('base', 'MURID'), T('base', 'MUSHAF'), T('base', 'JACOBABAD'), T('base', 'SUKKUR'), T('base', 'BHOLARI')],
-        PK: [],
+        PK: [T('base', 'ADAMPUR'), T('base', 'PATHANKOT'), T('sam', 'SUDARSHAN')],
       },
       ai: {
         IN: {
@@ -273,6 +277,8 @@
         PK: {
           aew: [['NUR KHAN', 32.75, 72.95], ['MASROOR', 26.2, 69.0]],
           caps: [['MINHAS', 2, 32.60, 73.90], ['MINHAS', 2, 31.70, 73.80], ['RAFIQUI', 2, 30.40, 73.10], ['JACOBABAD', 2, 28.20, 70.00], ['MUSHAF', 2, 33.30, 73.60]],
+          strikes: [{ t: 600, base: 'PESHAWAR', n: 2, preset: 'STRIKE', list: [T('base', 'ADAMPUR'), T('sam', 'SUDARSHAN')] }],
+          drones: [{ t: 300, base: 'SIALKOT', n: 8, mode: 'attack', list: [T('base', 'PATHANKOT')] }],
         },
       },
     },

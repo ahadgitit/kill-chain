@@ -94,6 +94,9 @@
       this.aewClear = { IN: 0, PK: 0 };
       this.prompts = [];
       this.promptCd = {};
+      this.missions = [];
+      this.missionTimer = 0;
+      this.missionNo = {};
       this.replay = [];
       this.replayTimer = 0;
       // Intelligence: fixed SAM and radar sites are known to the other side before the war.
@@ -405,6 +408,8 @@
       this.sweepTimer -= dt;
       if (this.sweepTimer <= 0) { this.sweep(); this.sweepTimer = 1; }
       for (const c of this.commanders) c.tick(dt);
+      this.missionTimer -= dt;
+      if (this.missionTimer <= 0) { this.tickMissions(); this.missionTimer = 2; }
       for (const b of this.bases) this.updateBase(b, dt);
       for (const u of this.units) {
         if (u.kind === 'air') { if (u.state === 'air') this.updateFlight(u, dt); }
@@ -854,7 +859,6 @@
         if (cheap && u.order && u.order.type === 'strike') continue;
         const want = t.kind === 'air' ? t.count : 1;
         if (this.inFlightAt(u.side, t) >= Math.min(want, this.isDrone(t) ? 1 : want)) continue;
-        if (t.kind === 'air' && t.def.role === 'aew' && !this.aewCleared(u.side, t)) continue;
         const k = this.chooseWeapon(u, t, AI_FIRE);
         if (!k || !this.canGuide(u, t, k)) continue;
         const off = Math.abs(angNorm(bearing(u, t) - u.hdg));
@@ -864,12 +868,6 @@
         if (sc > bestScore) { bestScore = sc; best = t; }
       }
       if (best) this.tryFire(u, best, AI_FIRE);
-    }
-    // The AI always has clearance to shoot at AEW&C; the player is asked first.
-    aewCleared(side, t) {
-      if (side !== this.player || this.aewClear[side] > this.t) return true;
-      this.promptFor('aew', t);
-      return false;
     }
 
     tryFire(u, t, factor) {
@@ -917,8 +915,6 @@
       if (t.kind !== 'air' || t.ghost || this.isDrone(t)) return;
       if (!t.threats.includes(m)) t.threats.push(m);
       this.log(t.side, `${t.callsign}: ${what}, ${m.w.name} ${dist(m, t).toFixed(0)} km`, 'warn', { alert: true, ref: t });
-      // Our own radar-guided missile still needs this jet? Ask the player.
-      if (!t.ai && this.missiles.some(x => x.shooter === t && !x.lock && !x.dead && x.kind === 'aam' && !x.w.tp)) this.promptFor('guide', t);
     }
 
     // ---------- missiles ----------
@@ -1099,7 +1095,6 @@
       for (const t of this.targetsOf(ENEMY[u.side])) {
         if (!this.fireQuality(u, t)) continue;
         if (!this.chooseWeapon(u, t, AI_FIRE)) continue;
-        if (t.kind === 'air' && t.def.role === 'aew' && !this.aewCleared(u.side, t)) continue;
         const sc = (this.isDrone(t) ? 200 : t.kind === 'air' ? 1000 : 500) - dist(u, t);
         if (sc > bestScore) { bestScore = sc; best = t; }
       }
@@ -1115,7 +1110,8 @@
       const tgt = u.engage || (u.order && u.order.type === 'attack' ? u.order.target : null);
       const near = tgt && this.isAlive(tgt) && dist(u, tgt) < def.radar;
       const guiding = this.missiles.some(m => m.shooter === u && !m.lock && !m.w.tp && m.kind !== 'cruise');
-      if (def.linked) u.radarOn = !aew || guiding || (near && (!this.fireQuality(u, tgt) || !this.tpOnly(u)));
+      if (u.radarManual) { /* the player set this flight's radar */ }
+      else if (def.linked) u.radarOn = !aew || guiding || (near && (!this.fireQuality(u, tgt) || !this.tpOnly(u)));
       else u.radarOn = !!tgt || this.nearestEnemy(u, 150) != null;
 
       if (!this.hasAAM(u) && !this.strikeWeapon(u) && u.order && u.order.type !== 'rtb') { u.engage = null; this.orderRTB(u); return; }
@@ -1241,12 +1237,19 @@
 
     // ---------- player commands ----------
     cmdMove(u, x, y) {
+      if (u.mission && u.mission.at) u.mission.at = { x, y };
       if (this.isDrone(u)) { u.order = { type: u.def.mission === 'sead' ? 'sead' : 'orbit', x, y, r: 20 }; return; }
-      u.order = { type: 'orbit', x, y, r: 15 };
+      u.order = { type: 'orbit', x, y, r: u.def.role === 'aew' ? 25 : 15 };
       u.engage = null; u.anchor = null;
       if (u.ai) u.cap = { x, y, r: 15 };
     }
     cmdAttack(u, t) {
+      if (u.ai && u.cap && u.order && u.order.type === 'orbit') {
+        // A patrol keeps its station: engage, then return to it.
+        u.engage = t;
+        u.anchor = { x: u.cap.x, y: u.cap.y, r: u.cap.r };
+        return;
+      }
       u.anchor = { x: u.x, y: u.y, r: 15 };
       u.order = { type: 'attack', target: t };
       u.engage = null;
@@ -1268,6 +1271,108 @@
       u.holdUntil = 0;
     }
     cmdSamRadar(u, on) { u.radarOn = on; }
+
+    // ---------- missions: the player plans, the AI flies ----------
+    // kind: cap | aew | strike | escort | sead | attack. A CAP or AEW&C mission keeps its
+    // station manned: when a flight heads home, a relief flight launches from the base.
+    createMission(m) {
+      const pre = { cap: 'CAP', aew: 'AEW', strike: 'STRIKE', escort: 'ESCORT', sead: 'SEAD', attack: 'ATTACK' }[m.kind];
+      this.missionNo[pre] = (this.missionNo[pre] || 0) + 1;
+      const ms = {
+        id: this.nextId++, name: `${pre}-${this.missionNo[pre]}`, status: 'planned', unit: null, flights: 0,
+        repeat: m.kind === 'cap' || m.kind === 'aew', launchAt: this.t, ...m,
+      };
+      if (ms.kind === 'strike' && ms.tot) ms.launchAt = this.strikeLaunchTime(ms);
+      this.missions.push(ms);
+      this.tickMissions();
+      if (ms.side === this.player) {
+        const when = ms.launchAt > this.t + 5 ? `, takes off at ${this.clock(ms.launchAt).slice(0, 4)}Z` : '';
+        this.log(ms.side, `${ms.name} planned: ${ms.n} ${AIRCRAFT[ms.type].name} from ${ms.base}${when}`, 'info');
+      }
+      return ms;
+    }
+    missionWeapon(type, preset) {
+      let best = null;
+      for (const k of Object.keys(PRESETS[type][preset] || {})) if (WEAPONS[k].kind === 'cruise' && (!best || WEAPONS[k].range > WEAPONS[best].range)) best = k;
+      return best;
+    }
+    // When a strike must take off so its weapons arrive at the time-on-target.
+    strikeLaunchTime(ms) {
+      const b = this.base(ms.base), ref = this.refFor(ms.target.kind, ms.target.id);
+      const wk = this.missionWeapon(ms.type, ms.preset);
+      if (!b || !ref || !wk) return this.t;
+      const w = WEAPONS[wk];
+      const d = dist(b, ref), launchDist = Math.min(d, w.range * 0.85);
+      return ms.tot - (d - launchDist) / AIRCRAFT[ms.type].speed - launchDist / w.speed - 30;
+    }
+    missionArrival(ms) {
+      const b = this.base(ms.base), ref = this.refFor(ms.target.kind, ms.target.id);
+      const wk = this.missionWeapon(ms.type, ms.preset);
+      if (!b || !ref || !wk) return this.t;
+      const w = WEAPONS[wk];
+      const d = dist(b, ref), launchDist = Math.min(d, w.range * 0.85);
+      return Math.max(this.t, ms.launchAt) + (d - launchDist) / AIRCRAFT[ms.type].speed + launchDist / w.speed + 30;
+    }
+    missionOrder(ms) {
+      if (ms.kind === 'cap' || ms.kind === 'aew') return { type: 'orbit', x: ms.at.x, y: ms.at.y, r: ms.kind === 'aew' ? 25 : 15 };
+      if (ms.kind === 'sead') return { type: 'sead', x: ms.at.x, y: ms.at.y, r: 20 };
+      if (ms.kind === 'attack') return { type: 'drone', list: [{ ...ms.target }] };
+      if (ms.kind === 'strike') {
+        const per = PRESETS[ms.type][ms.preset] || {};
+        const n = Object.entries(per).filter(([k]) => WEAPONS[k].kind === 'cruise').reduce((a, [, c]) => a + c, 0) * ms.n;
+        return { type: 'strike', list: [{ ...ms.target, n }] };
+      }
+      const b = this.base(ms.base);
+      return { type: 'orbit', x: b.x, y: b.y, r: 12 };
+    }
+    tickMissions() {
+      for (const ms of this.missions) {
+        if (ms.status === 'done') continue;
+        const u = ms.unit, alive = u && u.state === 'air';
+        if (alive) {
+          const home = u.order && u.order.type === 'rtb';
+          ms.status = home ? 'returning' : ms.kind === 'strike' ? (u.order.type === 'strike' ? 'inbound' : 'egress') : ms.kind === 'escort' ? 'escorting' : 'on station';
+          if (ms.kind === 'escort' && !home) this.steerEscort(ms, u);
+          if (!home || !ms.repeat) continue;
+        }
+        const once = !ms.repeat;
+        if (once && ms.flights > 0) { if (!alive) ms.status = 'done'; continue; }
+        if (this.t < ms.launchAt) { ms.status = 'scheduled'; continue; }
+        if (ms.kind === 'escort') {
+          const s = this.missions.find(x => x.id === ms.escortOf);
+          if (!s || s.status === 'done') { ms.status = 'done'; continue; }
+          if (!(s.unit && s.unit.state === 'air')) { ms.status = 'waiting for strike'; continue; }
+        }
+        const r = this.launchFlight(ms.base, ms.type, ms.n, { order: this.missionOrder(ms), preset: ms.preset, ai: true });
+        if (typeof r === 'string') { ms.status = 'waiting: ' + r.toLowerCase(); continue; }
+        if (alive) u.mission = null;                   // the old flight just flies home
+        r.mission = ms;
+        ms.unit = r;
+        ms.flights++;
+        ms.status = 'launching';
+        if (r.order.type === 'strike' || r.order.type === 'drone') r.strikeSince = this.t;
+      }
+    }
+    // Escorts hold a point 20 km ahead of their strike flight, toward its target.
+    steerEscort(ms, u) {
+      const s = this.missions.find(x => x.id === ms.escortOf);
+      const st = s && s.unit;
+      if (!st || st.state !== 'air' || (st.order && st.order.type === 'rtb')) {
+        if (u.order.type !== 'rtb') this.orderRTB(u);
+        return;
+      }
+      const ref = this.refFor(s.target.kind, s.target.id) || st;
+      const h = bearing(st, ref);
+      const p = { x: st.x + Math.sin(h) * 20, y: st.y - Math.cos(h) * 20 };
+      u.order = { type: 'orbit', x: p.x, y: p.y, r: 10 };
+      u.cap = { x: p.x, y: p.y, r: 10 };
+    }
+    cancelMission(ms) {
+      ms.repeat = false;
+      ms.status = 'done';
+      if (ms.unit && ms.unit.state === 'air') this.orderRTB(ms.unit);
+      this.log(ms.side, `${ms.name} cancelled`, 'info');
+    }
 
     // ---------- replay ----------
     record() {

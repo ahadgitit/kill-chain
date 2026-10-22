@@ -22,7 +22,45 @@
   function resize() { R.resize(); }
   window.addEventListener('resize', resize);
   resize();
-  R.fit(28.4, 70.6, 35.0, 77.6, 16);
+  const THEATRE = [28.4, 70.6, 35.0, 77.6];
+  const SUBCONTINENT = [5.0, 60.0, 38.5, 97.0];
+  R.fit(...SUBCONTINENT, 10);
+
+  // ---------- attract mode: an AI-vs-AI battle runs behind the main menu ----------
+  let attract = null, attractCam = 0;
+  const ATTRACT_SHOTS = [
+    [29.5, 71.5, 34.8, 77.2], [31.0, 72.5, 34.6, 76.0], [5.0, 60.0, 38.5, 97.0], [28.6, 70.0, 32.6, 75.5], [27.5, 67.5, 36.0, 79.5],
+  ];
+  function startAttract() {
+    attract = new KC.Sim(KC.SCENARIO, null);
+    attract.update(60 * 4);
+  }
+  function stepAttract(dt) {
+    if (!attract || attract.over || attract.t > 30 * 60) startAttract();
+    attract.update(dt * 6);
+    attractCam -= dt;
+    if (attractCam <= 0) {
+      const shot = ATTRACT_SHOTS[Math.floor(Math.random() * ATTRACT_SHOTS.length)];
+      R.flyTo(R.viewFor(...shot, 10), 6000);
+      attractCam = 11;
+    }
+  }
+  function bootText() {
+    const lines = [
+      ['SENSOR NETWORK', 'ONLINE'], ['AEW&C ORBITS', 'ON STATION'], ['TACTICAL DATA LINK', 'SYNCED'], ['THEATRE', 'PUNJAB / KASHMIR'],
+    ];
+    const el = $('boot');
+    let i = 0;
+    const tick = () => {
+      if (i >= lines.length) return;
+      const [k, v] = lines[i++];
+      el.innerHTML += `&gt; ${k.padEnd(20, '.')} <span class="ok">${v}</span>\n`;
+      setTimeout(tick, 260);
+    };
+    el.innerHTML = '';
+    tick();
+  }
+  bootText();
 
   // ---------- game lifecycle ----------
   function start(side, scenario, opts) {
@@ -30,6 +68,7 @@
     ui.side = side;
     ui.sel = null;
     ui.training = !!opts.training;
+    document.body.classList.remove('in-menu');
     document.body.classList.toggle('training', ui.training);
     sim = new KC.Sim(scenario || KC.SCENARIO, side);
     evSeen = 0;
@@ -37,7 +76,10 @@
     $('ticker').innerHTML = '';
     $('log-body').innerHTML = '';
     $('menu').classList.add('hidden');
-    R.fit(...(opts.fit || [28.4, 70.6, 35.0, 77.6]), 16);
+    // Fly from wherever the camera is (usually the menu's live battle) down into the theatre.
+    if (!opts.fit) R.fit(...SUBCONTINENT, 10);
+    R.flyTo(R.viewFor(...(opts.fit || THEATRE), 16), opts.fit ? 1800 : 2600);
+    attract = null;
     setSpeed(0);
     if (!ui.training) briefing(side);
     return sim;
@@ -100,11 +142,13 @@
         <button class="side ${me}" id="again"><b>PLAY AGAIN</b><span>Same side: ${SIDE_NAME[me]}</span></button>
         <button class="side ${them}" id="swap"><b>SWITCH SIDES</b><span>Play as ${SIDE_NAME[them]}</span></button>
       </div>
-      <button class="link" id="view">VIEW THE MAP</button>`;
+      <button class="link" id="view">VIEW THE MAP</button>
+      <button class="link" id="to-menu">MAIN MENU</button>`;
     $('debrief').classList.remove('hidden');
     $('again').onclick = () => { $('debrief').classList.add('hidden'); start(me); };
     $('swap').onclick = () => { $('debrief').classList.add('hidden'); start(them); };
     $('view').onclick = () => $('debrief').classList.add('hidden');
+    $('to-menu').onclick = showMenu;
   }
 
   // ---------- speed / top bar ----------
@@ -125,8 +169,9 @@
   $('btn-log').onclick = () => { $('log').classList.toggle('hidden'); $('btn-log').classList.toggle('on'); };
   $('log-close').onclick = () => { $('log').classList.add('hidden'); $('btn-log').classList.remove('on'); };
   let helpResume = null;
-  $('btn-help').onclick = () => { helpResume = ui.speed; setSpeed(0); $('help').classList.remove('hidden'); };
-  $('menu-help').onclick = () => { helpResume = null; $('help').classList.remove('hidden'); };
+  $('btn-help').onclick = () => { helpResume = ui.speed; setSpeed(0); $('help-quit').classList.toggle('hidden', !sim); $('help').classList.remove('hidden'); };
+  $('menu-help').onclick = () => { helpResume = null; $('help-quit').classList.add('hidden'); $('help').classList.remove('hidden'); };
+  $('help-quit').onclick = () => { $('help').classList.add('hidden'); if (KC.training) KC.training.stop(); showMenu(); };
   $('help-close').onclick = () => { $('help').classList.add('hidden'); if (helpResume) setSpeed(helpResume); };
   for (const b of document.querySelectorAll('#menu .side')) b.onclick = () => start(b.dataset.side);
 
@@ -201,10 +246,13 @@
         (ref.side !== ui.side && ref.kind !== 'site' && !sim.trackFor(ui.side, ref))) {
       if (ui.sel) ui.sel = null;
       p.classList.add('hidden');
+      ui.hudInset = 0;
       lastBtns = '';
       return;
     }
     p.classList.remove('hidden');
+    const pr = p.getBoundingClientRect();
+    ui.hudInset = pr.right > window.innerWidth - 170 ? pr.height + 12 : 0;
     const { info, btns } = describe(ref);
     let infoEl = p.querySelector('.info'), btnEl = p.querySelector('.btns');
     if (!infoEl) {
@@ -462,11 +510,12 @@
     p.x = e.clientX; p.y = e.clientY;
     if (ptrs.size === 1) {
       if (Math.hypot(p.x - p.x0, p.y - p.y0) > 8) dragMoved = true;
-      if (dragMoved) { R.view.cx -= dx / R.view.scale; R.view.cy -= dy / R.view.scale; }
+      if (dragMoved) { R.flight = null; R.view.cx -= dx / R.view.scale; R.view.cy -= dy / R.view.scale; }
     } else if (ptrs.size === 2 && pinch) {
       const [a, b] = [...ptrs.values()];
       const d = Math.hypot(a.x - b.x, a.y - b.y);
       const cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
+      R.flight = null;
       R.view.cx -= (cx - pinch.cx) / R.view.scale;
       R.view.cy -= (cy - pinch.cy) / R.view.scale;
       R.zoomAt(cx, cy, d / pinch.d);
@@ -483,6 +532,12 @@
     }
   };
   canvas.addEventListener('pointerup', up);
+  canvas.addEventListener('pointermove', e => {
+    if (e.pointerType !== 'mouse') return;
+    const r = canvas.getBoundingClientRect();
+    R.cursor = { x: e.clientX - r.left, y: e.clientY - r.top };
+  });
+  canvas.addEventListener('pointerleave', () => { R.cursor = null; });
   canvas.addEventListener('pointercancel', up);
   canvas.addEventListener('wheel', e => {
     e.preventDefault();
@@ -510,7 +565,10 @@
     const dt = Math.min(0.1, (now - last) / 1000);
     last = now;
     if (sim && !sim.over) sim.update(dt * ui.speed);
-    R.draw(sim, ui);
+    if (!sim) {
+      stepAttract(dt);
+      R.draw(attract, { side: 'ALL', marks: [] });
+    } else R.draw(sim, ui);
     if (sim) {
       pumpEvents();
       panelTimer -= dt;
@@ -522,5 +580,16 @@
   }
   requestAnimationFrame(frame);
 
-  KC.app = { ui, R, get sim() { return sim; }, start, setSpeed, select, hint, renderPanel, showMenu: () => { ui.training = false; document.body.classList.remove('training'); sim = null; $('panel').classList.add('hidden'); $('menu').classList.remove('hidden'); } };
+  KC.app = { ui, R, get sim() { return sim; }, start, setSpeed, select, hint, renderPanel, showMenu };
+  function showMenu() {
+    ui.training = false;
+    document.body.classList.remove('training');
+    document.body.classList.add('in-menu');
+    sim = null;
+    attractCam = 0;
+    $('panel').classList.add('hidden');
+    $('debrief').classList.add('hidden');
+    $('menu').classList.remove('hidden');
+    bootText();
+  }
 })(globalThis.KC);

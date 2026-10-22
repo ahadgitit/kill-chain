@@ -216,5 +216,6 @@
   }
 
   $('menu-training').onclick = begin;
-  KC.training = { begin, tick, LESSONS, goto: showIntro };
+  function stop() { T.phase = 'off'; $('coach').classList.add('hidden'); }
+  KC.training = { begin, tick, stop, LESSONS, goto: showIntro };
 })(globalThis.KC);

@@ -40,10 +40,17 @@ New players: start with **Training: Missile Evasion** on the main menu (four sho
 
 ```
 index.html, style.css
-js/geo.js      simplified map outlines + projection
+js/mapdata.js  generated map data (Natural Earth), see tools/build_map.py
+js/geo.js      stereographic projection, frontier tests, labels
 js/data.js     aircraft, weapons, SAMs, scenario
 js/sim.js      simulation core (sensors, link picture, missiles, AI), no DOM access
 js/render.js   canvas renderer
-js/ui.js       input, HUD, menus, game loop
+js/ui.js       input, HUD, menus, attract mode, game loop
+js/training.js missile-evasion training mission
+tools/build_map.py  rebuild js/mapdata.js from the world-atlas + sane-topojson npm packages
 tools/headless.js   run AI-vs-AI headless: node tools/headless.js 10
 ```
+
+## Map data
+
+Coastlines, country borders, rivers and lakes come from [Natural Earth](https://www.naturalearthdata.com/) (public domain), via the `world-atlas` and `sane-topojson` npm packages. Borders are Natural Earth's de facto lines, and Kashmir is shown divided by the Line of Control. The map uses a stereographic projection centred on 30°N 73°E, so shapes stay true and in-game kilometres stay within ~2.5% of real distances across the theatre.

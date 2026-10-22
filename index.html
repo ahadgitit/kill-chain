@@ -11,9 +11,10 @@
   <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
 </head>
-<body>
+<body class="in-menu">
   <div id="app">
     <canvas id="map"></canvas>
+    <div id="crt"></div>
 
     <header id="topbar">
       <div class="brand">KILL<span>CHAIN</span></div>
@@ -38,10 +39,12 @@
     <div id="panel" class="hidden"></div>
     <div id="hint"></div>
 
-    <div id="menu" class="overlay">
-      <div class="card wide">
-        <div class="title">KILL<span>CHAIN</span></div>
+    <div id="menu" class="overlay menu">
+      <div class="card wide hud">
+        <div class="boot" id="boot" aria-hidden="true"></div>
+        <div class="title" data-text="KILLCHAIN">KILL<span>CHAIN</span></div>
         <div class="sub">An air-war simulation inspired by the India–Pakistan air battle of 6–7 May 2025</div>
+        <div class="live"><i></i> LIVE: AI vs AI battle running behind this menu</div>
         <div class="sides">
           <button class="side IN" data-side="IN">
             <b>COMMAND INDIA</b>
@@ -89,6 +92,7 @@
           <li>Red line from a missile to your jet: it can still reach you. Grey dashed line: it is <b>losing energy</b> and will fall short if you keep running. The label shows its Mach number and distance.</li>
         </ul>
         <button class="primary" id="help-close">GOT IT</button>
+        <button class="link hidden" id="help-quit">QUIT TO MAIN MENU</button>
       </div>
     </div>
 
@@ -97,6 +101,7 @@
     <div id="debrief" class="overlay hidden"><div class="card wide" id="debrief-body"></div></div>
   </div>
 
+  <script src="js/mapdata.js"></script>
   <script src="js/geo.js"></script>
   <script src="js/data.js"></script>
   <script src="js/sim.js"></script>

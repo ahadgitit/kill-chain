@@ -1,6 +1,6 @@
 // Runs the scenario AI-vs-AI without a browser: node tools/headless.js [runs] [seed]
 const fs = require('fs'), path = require('path'), vm = require('vm');
-for (const f of ['geo.js', 'data.js', 'sim.js']) {
+for (const f of ['mapdata.js', 'geo.js', 'data.js', 'sim.js']) {
   vm.runInThisContext(fs.readFileSync(path.join(__dirname, '..', 'js', f), 'utf8'), { filename: f });
 }
 const KC = globalThis.KC;

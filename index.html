@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#030608">
+  <meta name="description" content="KILL CHAIN: a 2D air-war simulation of a May 2025 India-Pakistan style air battle. AEW&C, data links, PL-15 and Meteor missiles.">
+  <title>Kill Chain</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <canvas id="map"></canvas>
+
+    <header id="topbar">
+      <div class="brand">KILL<span>CHAIN</span></div>
+      <div id="clock">----Z</div>
+      <div id="speed" class="seg">
+        <button data-speed="0" title="Pause (Space)">II</button>
+        <button data-speed="1">1×</button>
+        <button data-speed="5" class="on">5×</button>
+        <button data-speed="15">15×</button>
+        <button data-speed="40">40×</button>
+      </div>
+      <div class="spacer"></div>
+      <div id="score"></div>
+      <button id="btn-sensors" class="icon on" title="Show sensor coverage">◎</button>
+      <button id="btn-log" class="icon" title="Event log">≡</button>
+      <button id="btn-help" class="icon" title="How to play">?</button>
+    </header>
+
+    <div id="ticker"></div>
+    <div id="log" class="hidden"><div class="log-head">EVENT LOG <button id="log-close">✕</button></div><div id="log-body"></div></div>
+    <div id="panel" class="hidden"></div>
+    <div id="hint"></div>
+
+    <div id="menu" class="overlay">
+      <div class="card wide">
+        <div class="title">KILL<span>CHAIN</span></div>
+        <div class="sub">An air-war simulation inspired by the India–Pakistan air battle of 6–7 May 2025</div>
+        <div class="sides">
+          <button class="side IN" data-side="IN">
+            <b>COMMAND INDIA</b>
+            <span>Strike package. Get SCALP-EG and SPICE weapons onto 5 target sites while losing as few jets as possible.</span>
+          </button>
+          <button class="side PK" data-side="PK">
+            <b>COMMAND PAKISTAN</b>
+            <span>Air defence. Use your AEW&amp;C picture and PL-15s to shoot down strike aircraft and intercept cruise missiles.</span>
+          </button>
+        </div>
+        <button id="menu-help" class="link">HOW TO PLAY</button>
+        <p class="fine">A simplified, unofficial game. Performance figures are open-source estimates; results come from the simulation each time you play, not from either side's claims. Not a historical record.</p>
+      </div>
+    </div>
+
+    <div id="help" class="overlay hidden">
+      <div class="card wide scroll">
+        <div class="h">HOW TO PLAY</div>
+        <ol class="steps">
+          <li><b>Detect.</b> Radar finds enemies. AEW&amp;C aircraft (the circles with a bar) and ground radars see furthest. Fighter radar only looks ±60° ahead.</li>
+          <li><b>Share.</b> Linked units share every track over the <b>data link</b>. A linked fighter can keep its radar <b>OFF</b> (hollow icon) and still shoot using the AEW&amp;C's track. Its target gets no launch warning.</li>
+          <li><b>Shoot.</b> Missiles slow down as they fly. Long shots at a target that turns away usually fail. The inner ring around a selected jet is a rough no-escape range. Missiles like <b>PL-15E</b> can be guided by the data link after launch. <b>Meteor</b>, AIM-120, R-77 and MICA need the shooter's own radar until their seeker turns on.</li>
+          <li><b>Support.</b> After firing a radar-guided missile, your jet "cranks", turning 50° off to keep the target in its radar. If it turns away too early, the missile goes blind.</li>
+          <li><b>Survive.</b> When warned, jets turn away (drag), jam and drop chaff. Radar emissions give you away: enemies detect radars further than radars detect jets.</li>
+        </ol>
+        <div class="h2">CONTROLS</div>
+        <ul class="controls">
+          <li><b>Tap</b> your flight to select it. <b>Tap the map</b> to send it there (it orbits on arrival).</li>
+          <li>With a flight selected, <b>tap an enemy track</b> to attack it, or <b>tap a red target site</b> (India) to strike it.</li>
+          <li><b>Tap an airbase</b> to scramble reserve flights.</li>
+          <li><b>Drag</b> to pan, <b>pinch or scroll</b> to zoom. Speed buttons are at the top. On a keyboard: Space pauses, 1–5 set speed, Esc deselects.</li>
+          <li><b>ROE FREE</b>: the flight fires on its own at good-quality targets. <b>HOLD</b>: it only fires when you order an attack.</li>
+        </ul>
+        <div class="h2">SYMBOLS</div>
+        <ul class="controls">
+          <li>▲ filled: radar ON · △ hollow: radar silent · dashed: passive (emission-only) track · ◇ target site · □ airbase · ▣ SAM site</li>
+        </ul>
+        <button class="primary" id="help-close">GOT IT</button>
+      </div>
+    </div>
+
+    <div id="debrief" class="overlay hidden"><div class="card wide" id="debrief-body"></div></div>
+  </div>
+
+  <script src="js/geo.js"></script>
+  <script src="js/data.js"></script>
+  <script src="js/sim.js"></script>
+  <script src="js/render.js"></script>
+  <script src="js/ui.js"></script>
+</body>
+</html>

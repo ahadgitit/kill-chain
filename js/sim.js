@@ -1300,7 +1300,7 @@
       if ((m.t > w.burn && m.spd < V_MIN) || m.t > w.tMax * 1.5) {
         m.dead = true;
         m.end = 'energy';
-        if (alive && m.lock && !this.isDrone(t)) this.log(t.side, `${t.callsign} defeated a ${w.name} (out of energy)`, 'good');
+        if (alive && m.lock && t.kind === 'air' && !this.isDrone(t)) this.log(t.side, `${t.callsign} defeated a ${w.name} (out of energy)`, 'good');
         else if (alive && !this.isDrone(t)) this.log(m.side, `${w.name} from ${m.shooter.callsign} lost its target`, 'info');
       }
     }

@@ -31,7 +31,7 @@ It works on desktop and mobile (touch), with no install and no build step.
 - **Fog of war.** Kills are only *claimed* during the night. The debrief shows claimed against confirmed.
 - **Escalation.** Strikes and kills raise a shared meter. At 100% both sides lose. Night 4 ends in a ceasefire.
 - **After-action replay.** Watch the whole night from both sides.
-- **Sound.** All synthesised in the browser (no audio files): a radar-room hum with a sweep ping, missile launch whoosh, warning tones (launch warning, missile active), lock tone, air and ground explosions, jet take-off roar and a striker alarm. 🔊 in the top bar or on the menu mutes it.
+- **Sound.** All synthesised in the browser (no audio files): a sonar-style radar ping with echoes and faint contact returns over a quiet low pad, missile launch whoosh, warning tones (launch warning, missile active), lock tone, air and ground explosions, jet take-off roar and a striker alarm. 🔊 in the top bar or on the menu mutes it.
 - **Scoring.**
   - Every night, both sides have priority targets to attack and assets to defend. A priority target is worth 10 when destroyed (3 hits), scored per hit; the defender keeps 8 per target for the share left intact.
   - Up to 6 per other base or air defence (by hits).

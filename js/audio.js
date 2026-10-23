@@ -50,41 +50,45 @@
     return o;
   }
 
-  // ---------- ambience: radar room hum with a periodic sweep ping ----------
+  // ---------- ambience: sonar-style radar ping over a quiet, slowly swelling pad ----------
+  // Pure sine tones only (no noise), so the background stays clean.
   function startHum() {
     const bus = ctx.createGain();
-    bus.gain.value = 0.9;
+    bus.gain.value = 1;
     bus.connect(master);
-    const out = [];
-    for (const [f, v, type] of [[50, 0.035, 'sine'], [100, 0.018, 'sine'], [150, 0.006, 'triangle']]) {
+    // Deep pad: two slightly detuned low sines that beat slowly, swelling in and out.
+    const pad = ctx.createGain();
+    pad.gain.value = 0.02;
+    pad.connect(bus);
+    for (const f of [55, 55.4, 82.5]) {
       const o = ctx.createOscillator(), g = ctx.createGain();
-      o.type = type; o.frequency.value = f; g.gain.value = v;
-      o.connect(g).connect(bus); o.start(); out.push(o);
+      o.type = 'sine'; o.frequency.value = f; g.gain.value = f > 60 ? 0.35 : 1;
+      o.connect(g).connect(pad); o.start();
     }
-    // Electronics / air-conditioning hiss
-    const n = ctx.createBufferSource(); n.buffer = noise; n.loop = true;
-    const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 520; bp.Q.value = 0.6;
-    const ng = ctx.createGain(); ng.gain.value = 0.012;
-    n.connect(bp).connect(ng).connect(bus); n.start();
-    // Slow breathing on the hum
     const lfo = ctx.createOscillator(), lg = ctx.createGain();
-    lfo.frequency.value = 0.18; lg.gain.value = 0.25;
-    lfo.connect(lg).connect(bus.gain); lfo.start();
-    // Radar sweep ping with an echo, every 5 s
-    const echo = ctx.createDelay(); echo.delayTime.value = 0.28;
-    const fb = ctx.createGain(); fb.gain.value = 0.32;
-    const eg = ctx.createGain(); eg.gain.value = 0.6;
-    echo.connect(fb).connect(echo); echo.connect(eg).connect(bus);
-    const ping = () => {
-      if (!ctx) return;
-      const t = now() + 0.05;
+    lfo.frequency.value = 0.05; lg.gain.value = 0.012;
+    lfo.connect(lg).connect(pad.gain); lfo.start();
+    // Spacious echo: a long feedback delay, darkened a little on each repeat.
+    const echo = ctx.createDelay(); echo.delayTime.value = 0.42;
+    const fb = ctx.createGain(); fb.gain.value = 0.45;
+    const damp = ctx.createBiquadFilter(); damp.type = 'lowpass'; damp.frequency.value = 2200;
+    const eg = ctx.createGain(); eg.gain.value = 0.5;
+    echo.connect(damp).connect(fb).connect(echo); damp.connect(eg).connect(bus);
+    const blip = (t, f, peak, dec) => {
       const o = ctx.createOscillator(), g = ctx.createGain();
-      o.type = 'sine'; o.frequency.setValueAtTime(1750, t); o.frequency.exponentialRampToValueAtTime(1650, t + 0.25);
-      env(g, t, 0.004, 0.022, 0.35);
+      o.type = 'sine'; o.frequency.setValueAtTime(f, t); o.frequency.exponentialRampToValueAtTime(f * 0.985, t + dec);
+      env(g, t, 0.012, peak, dec);
       o.connect(g); g.connect(bus); g.connect(echo);
-      o.start(t); o.stop(t + 0.5);
+      o.start(t); o.stop(t + dec + 0.05);
     };
-    hum = { bus, timer: setInterval(ping, 5000) };
+    // Main sweep ping every 4.5 s; sometimes a faint, delayed "return" from a contact.
+    const ping = () => {
+      if (!ctx || ctx.state !== 'running') return;
+      const t = now() + 0.05;
+      blip(t, 1180, 0.05, 2.2);
+      if (Math.random() < 0.45) blip(t + 1.2 + Math.random() * 1.6, 1180 * (0.9 + Math.random() * 0.15), 0.012, 0.7);
+    };
+    hum = { bus, timer: setInterval(ping, 4500) };
     ping();
   }
 

@@ -90,23 +90,23 @@
     LY80: { name: 'LY-80', radar: 80, weapon: 'LY80', ammo: 6 },
   };
 
-  // Loadout presets, per jet. A base's preset decides what each jet takes off with.
+  // Loadouts, per jet, set by the mission: CHASE and ESCORT fly AIR (air-to-air only),
+  // GROUND ATTACK flies STRIKE (air-to-surface only, so strike jets need escorts).
   const PRESETS = {
-    RAFALE: { AIR: { METEOR: 4, MICA: 2, MICAIR: 2 }, STRIKE: { SCALP: 2, MICA: 2, MICAIR: 2 }, PRECISION: { HAMMER: 6, MICA: 2, MICAIR: 2 } },
-    SU30: { AIR: { R77: 6, R73: 2 }, STRIKE: { BRAHMOS: 1, R77: 2, R73: 2 } },
+    RAFALE: { AIR: { METEOR: 4, MICA: 2, MICAIR: 2 }, STRIKE: { SCALP: 2 } },
+    SU30: { AIR: { R77: 6, R73: 2 }, STRIKE: { BRAHMOS: 1 } },
     MIG29: { AIR: { R77: 4, R73: 2 } },
-    M2000: { AIR: { MICA: 4, MICAIR: 2 }, STRIKE: { SPICE: 2, MICA: 2, MICAIR: 2 } },
-    J10C: { AIR: { PL15: 4, PL10: 2 }, STRIKE: { LS6: 4, PL15: 2, PL10: 2 } },
-    JF17B3: { AIR: { PL15: 2, SD10: 2, PL5: 2 }, STRIKE: { CM400: 1, PL15: 2, PL5: 2 } },
-    JF17B2: { AIR: { SD10: 2, PL5: 2 }, STRIKE: { CM400: 1, SD10: 2, PL5: 2 } },
-    F16: { AIR: { AIM120: 4, AIM9X: 2 }, STRIKE: { H4: 2, AIM120: 2, AIM9X: 2 } },
+    M2000: { AIR: { MICA: 4, MICAIR: 2 }, STRIKE: { SPICE: 2 } },
+    J10C: { AIR: { PL15: 4, PL10: 2 }, STRIKE: { LS6: 4 } },
+    JF17B3: { AIR: { PL15: 2, SD10: 2, PL5: 2 }, STRIKE: { CM400: 1 } },
+    JF17B2: { AIR: { SD10: 2, PL5: 2 }, STRIKE: { CM400: 1 } },
+    F16: { AIR: { AIM120: 4, AIM9X: 2 }, STRIKE: { H4: 2 } },
     NETRA: { AEW: {} }, PHALCON: { AEW: {} }, ERIEYE: { AEW: {} }, ZDK03: { AEW: {} },
     HAROP: { SEAD: {} }, SWARM: { ATTACK: {} },
   };
   const PRESET_INFO = {
     AIR: 'Air-to-air: maximum missiles for fighting other jets.',
-    STRIKE: 'Strike: stand-off weapons for ground targets, with a few missiles for self-defence.',
-    PRECISION: 'Precision: six short-range HAMMER bombs. Must fly within ~60 km of the target.',
+    STRIKE: 'Ground attack: stand-off weapons only, no air-to-air missiles.',
     AEW: 'Airborne early warning: no weapons.',
     SEAD: 'Hunts enemy radars.', ATTACK: 'One-way attack on a ground target.',
   };

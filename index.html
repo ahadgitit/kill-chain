@@ -29,7 +29,6 @@
       <div class="spacer"></div>
       <div id="score"></div>
       <button id="btn-missions" class="icon" title="Missions">▤ 0</button>
-      <button id="btn-autopause" class="icon on" title="Auto-pause on missile warning">⚠</button>
       <button id="btn-sensors" class="icon on" title="Show sensor coverage">◎</button>
       <button id="btn-log" class="icon" title="Event log">≡</button>
       <button id="btn-help" class="icon" title="How to play">?</button>
@@ -41,11 +40,6 @@
     <div id="panel" class="hidden"></div>
     <div id="hint"></div>
 
-    <div id="ewbar" class="hidden">
-      <button data-ew="jam" title="Jam the enemy data link for 75 s"><b>LINK JAM</b><small>READY</small><i></i></button>
-      <button data-ew="barrage" title="Degrade enemy radars over an area for 60 s"><b>BARRAGE</b><small>READY</small><i></i></button>
-      <button data-ew="decoy" title="Launch decoys that look like a pair of fighters"><b>DECOYS</b><small>READY</small><i></i></button>
-    </div>
     <div id="card" class="hidden"></div>
     <div id="replaybar" class="hidden">
       <span class="rp-tag">REPLAY</span>
@@ -77,29 +71,27 @@
           <li><b>Support.</b> After firing a radar-guided missile, your jet "cranks", turning 50° off to keep the target in its radar. If it turns away too early, the missile goes blind.</li>
           <li><b>Survive.</b> When warned, jets turn away (drag), jam and drop chaff. Radar emissions give you away: enemies detect radars further than radars detect jets.</li>
         </ol>
-        <div class="h2">RUNNING THE WAR</div>
+        <div class="h2">YOUR JOB: THREE MISSIONS</div>
         <ul class="controls">
-          <li><b>Missions.</b> Every jet starts on the ground. Tap a base (□ with a number), set the flight size, and pick a mission: <b>PATROL</b>, <b>STRIKE</b> (tap a target, choose a time on target, add an escort), <b>ESCORT</b>, <b>AEW&amp;C ORBIT</b> or a drone mission. The AI flies it: it fights, refuels, goes home, and for patrols launches relief flights. <b>▤</b> lists your missions.</li>
-          <li><b>Limits.</b> Key weapons (Meteor, SCALP, BrahMos, PL-15, CM-400) come from a limited national stock. Fuel is limited: low fuel means <b>BINGO</b> and the flight goes home. Landing refuels and re-arms (about 7 minutes). Only so many jets can be airborne at once (India 24, Pakistan 20).</li>
-          <li><b>Strikes.</b> Strikes timed with the same time on target arrive together. Hits on a base close its runway at 60% damage and can destroy jets parked there. Jets heading home divert elsewhere.</li>
-          <li><b>Drones.</b> Harop hunts radars by their emissions (turn a SAM's radar OFF to hide it). Swarm drones are cheap: they soak up expensive SAM missiles.</li>
-          <li><b>EW.</b> <b>LINK JAM</b> cuts the enemy's data link, so silent shots don't work. <b>BARRAGE</b> blinds enemy radars over an area. <b>DECOYS</b> send fake fighters that draw missiles. Each has a cooldown.</li>
-          <li><b>Decisions.</b> Cards pop up at key moments, with a 10-second timer.</li>
-          <li><b>Fog of war.</b> Kills are only <b>claimed</b> until the debrief reveals the truth.</li>
-          <li><b>Escalation.</b> Every strike and kill raises escalation. At <b>100%</b> the crisis spirals and <b>both sides lose</b>.</li>
-          <li><b>Replay.</b> After the night, watch the whole battle from both sides.</li>
+          <li>Tap one of your <b>air bases</b> (□ with a number), choose how many aircraft to send, and pick a mission. Or tap an aircraft that is already flying and give it a new one.</li>
+          <li><b>CHASE</b>: tap an enemy aircraft. Your jets take off with air-to-air missiles and hunt it down, or chase it back into its own airspace. They can be shot down too.</li>
+          <li><b>ESCORT</b>: tap one of your ground-attack flights. The escort flies ahead of it with air-to-air missiles and fights off interceptors.</li>
+          <li><b>GROUND ATTACK</b>: tap an enemy site, radar, SAM or air base. The jets carry air-to-surface weapons only, so add an escort (<b>LAUNCH + ESCORT</b>). Drone bases send one-way drones.</li>
+          <li><b>Shortcut</b>: with a flight selected, tap an enemy aircraft to chase it, or a target to attack it.</li>
+          <li>The AI flies everything else: it dodges missiles, manages radar, goes home at low fuel, refuels and re-arms. AEW&amp;C aircraft fly themselves, and ready fighters <b>scramble on their own</b> when enemies come near their base.</li>
         </ul>
-        <div class="h2">CONTROLS</div>
+        <div class="h2">THE RULES</div>
         <ul class="controls">
-          <li><b>Tap</b> your flight to select it. <b>Tap the map</b> to send it there (it orbits on arrival).</li>
-          <li>With a flight selected, <b>tap an enemy track</b> to attack it, or <b>tap an enemy base, SAM, radar or target</b> to strike it.</li>
-          <li><b>Tap an airbase</b> to deploy aircraft. <b>RTB</b> sends a flight home to refuel and re-arm.</li>
-          <li><b>Drag</b> to pan, <b>pinch or scroll</b> to zoom. Speed buttons are at the top. On a keyboard: Space pauses, 1–5 set speed, Esc deselects.</li>
-          <li><b>ROE FREE</b>: the flight fires on its own at good-quality targets. <b>HOLD</b>: it only fires when you order an attack.</li>
-          <li><b>BREAK</b> (B): turn tail and run at full speed, so the missile burns its energy chasing you. Best against long shots.</li>
-          <li><b>NOTCH</b> (N): fly at 90° to the missile. Doppler radars and radar seekers lose a target that is neither closing nor opening. Best against a close, fast missile you can't outrun.</li>
-          <li>Jets defend automatically when warned. BREAK and NOTCH let you choose the move yourself, or act early, before any warning. Tap again to hand control back.</li>
-          <li><b>⚠</b> in the top bar pauses the game whenever one of your jets gets a missile warning.</li>
+          <li><b>Limits</b>: key weapons (Meteor, SCALP, BrahMos, PL-15, CM-400) are limited. Fuel is limited. Only 24 Indian or 20 Pakistani aircraft can fly at once.</li>
+          <li><b>Air bases</b>: hits close a runway at 60% damage and can destroy jets parked there.</li>
+          <li><b>Fog of war</b>: kills are only <b>claimed</b> until the debrief reveals the truth.</li>
+          <li><b>Escalation</b>: every strike and kill raises it. At <b>100%</b> both sides lose.</li>
+          <li><b>Replay</b>: after the night, watch the whole battle from both sides.</li>
+        </ul>
+        <div class="h2">MAP CONTROLS</div>
+        <ul class="controls">
+          <li><b>Drag</b> to pan, <b>pinch or scroll</b> to zoom. Speed buttons are at the top. On a keyboard: Space pauses, 1–5 set speed, Esc cancels.</li>
+          <li><b>▤</b> lists your missions. <b>≡</b> is the event log.</li>
         </ul>
         <div class="h2">SYMBOLS</div>
         <ul class="controls">

@@ -101,6 +101,9 @@
           s.done = true;
           this.lastStrikeAt = t;
           this.lastStrikeTarget = sim.refFor(s.list[0].kind, s.list[0].id);
+          // Strike jets carry no air-to-air missiles, so give them an escort.
+          const eb = this.fighterBaseNear(b);
+          if (eb) sim.createMission({ side: this.side, kind: 'escort', base: eb.base, type: eb.type, n: 2, preset: 'AIR', escortUnit: u });
         }
       }
       for (const s of this.escorts) {
@@ -117,20 +120,6 @@
         if (this.launch(s.base, s.n, null, order)) s.done = true;
       }
 
-      // Electronic warfare
-      const ours = sim.units.filter(u => u.side === this.side && u.state === 'air' && u.order && u.order.type === 'strike');
-      const nearFront = ours.filter(u => geo.frontierDist(u.x, u.y) < 160);
-      if (nearFront.length && sim.ewReady(this.side, 'jam')) sim.cmdEW(this.side, 'jam');
-      if (nearFront.length && sim.ewReady(this.side, 'barrage')) {
-        const u = nearFront[0];
-        sim.cmdEW(this.side, 'barrage', u.x, u.y);
-      }
-      if (this.lastStrikeTarget && t - this.lastStrikeAt < 90 && sim.ewReady(this.side, 'decoy')) {
-        sim.cmdEW(this.side, 'decoy', this.lastStrikeTarget.x, this.lastStrikeTarget.y);
-      }
-      // Defensive jamming when several missiles are in the air against us.
-      const incoming = sim.missiles.filter(m => m.side !== this.side && m.kind === 'aam' && m.target && m.target.side === this.side).length;
-      if (incoming >= 3 && sim.ewReady(this.side, 'jam')) sim.cmdEW(this.side, 'jam');
     }
 
     // Called by the sim when enemy weapons are heading for one of our bases.

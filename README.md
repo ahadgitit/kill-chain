@@ -7,12 +7,18 @@ It works on desktop and mobile (touch), with no install and no build step.
 
 - **Campaign (4 nights):** opening strikes, drone night, retaliation, airbase strikes. Aircraft losses, weapon stocks, base damage, destroyed air defences and escalation carry over from night to night. The highest total wins.
 - **Single night:** play any one of the four, as either side.
-- **Training:** four lessons on missile evasion and the kill chain.
+- **Training:** four lessons showing how jets evade missiles and how the kill chain works.
 
 ## How a night works
 
 - **Air bases.** Each base hosts one aircraft type, using real names and locations (India: Ambala Rafale, Halwara/Sirsa/Jodhpur Su-30MKI, Adampur/Srinagar MiG-29, Pathankot Mirage 2000, Bathinda Netra, Agra Phalcon, Amritsar Harop; Pakistan: Minhas J-10CE, Rafiqui/Peshawar JF-17, Mushaf/Jacobabad F-16, Nur Khan Erieye, Masroor ZDK-03, Sialkot drones). Other fields are divert bases and targets.
-- **Missions, not micromanagement.** Everything starts on the ground. Tap a base, set the flight size and pick a mission: **PATROL**, **STRIKE** (tap a target, choose a time on target, optionally add an escort), **ESCORT**, **AEW&C ORBIT**, **HUNT RADARS** or **DRONE ATTACK**. The AI flies it: it fights, defends itself, goes home at bingo fuel, and for patrols and orbits launches relief flights. Strikes given the same time on target arrive together. The ▤ list shows every mission.
+- **Your job: three missions.** Tap one of your air bases, choose how many aircraft to send, and pick:
+  - **CHASE**: tap an enemy aircraft. The jets launch with air-to-air missiles and hunt it down, or chase it back into its own airspace.
+  - **ESCORT**: tap one of your ground-attack flights. The escort flies ahead of it and fights off interceptors.
+  - **GROUND ATTACK**: tap an enemy site, radar, SAM or air base. The jets carry air-to-surface weapons only, so use **LAUNCH + ESCORT**. Drone bases send one-way drones.
+
+  You can also select an airborne flight and give it a new mission, or simply tap an enemy with the flight selected.
+- **The AI flies everything else.** It dodges missiles (break or notch), manages radar, returns at bingo fuel, refuels and re-arms. AEW&C aircraft take off and orbit on their own, and ready fighters scramble automatically when enemies come near their base.
 - **Limits.**
   - **Weapons:** the decisive ones (Meteor, SCALP-EG, BrahMos-A, PL-15E, CM-400AKG) come from limited national stocks.
   - **Fuel:** limited. At BINGO a flight returns to base.
@@ -20,8 +26,7 @@ It works on desktop and mobile (touch), with no install and no build step.
   - **Airborne cap:** at most 24 Indian and 20 Pakistani aircraft in the air at once.
 - **Strikes.** Hits on a base close its runway at 60% damage, so jets divert, and can destroy aircraft parked on it. SAM sites and radars can be destroyed.
 - **Drones.** Harop hunts radars by their emissions (switch a SAM's radar off to hide it). Swarm drones are cheap and soak up SAM missiles.
-- **Electronic warfare (on cooldowns).** LINK JAM cuts the enemy data link, BARRAGE blinds radars over an area, and DECOYS send fake fighters.
-- **Decision cards.** 10-second choices at key moments: scramble a threatened base's jets or keep them sheltered, stand down at high escalation.
+- **Decision card.** At 80% escalation you choose: stand down strikes, or press on.
 - **Fog of war.** Kills are only *claimed* during the night. The debrief shows claimed against confirmed.
 - **Escalation.** Strikes and kills raise a shared meter. At 100% both sides lose. Night 4 ends in a ceasefire.
 - **After-action replay.** Watch the whole night from both sides.
@@ -52,13 +57,9 @@ All figures are rough open-source estimates in `js/data.js`. Real performance is
 
 ## Controls
 
-- Tap a flight to select it. Tap the map to move it there (it orbits on arrival).
-- With a flight selected, tap an enemy track to attack it, or tap a red target site to strike it.
-- Tap an airbase to deploy or scramble its aircraft and set their loadout. RTB sends a flight home to refuel and re-arm.
-- **BREAK** (B) turns tail and runs, so a long-range missile burns out chasing you. **NOTCH** (N) flies at 90° to a close, fast missile to hide in radar clutter. Jets defend automatically when warned; these buttons let you choose the move, or act before any warning.
-- Incoming missiles show a line to their target: red while they can still reach it, grey dashed once they are losing energy.
-- ⚠ in the top bar auto-pauses the game on missile warnings.
-- Drag to pan; pinch or scroll to zoom. Space pauses; keys 1–5 set speed; Esc deselects; R toggles radar; B/N break/notch.
+- Tap a base or a flight, pick CHASE, ESCORT or GROUND ATTACK, then tap the target.
+- With a flight selected, tap an enemy aircraft to chase it or an enemy target to attack it.
+- Drag to pan; pinch or scroll to zoom. Space pauses; keys 1–5 set speed; Esc cancels. ▤ lists missions, ≡ shows the event log.
 
 New players: start with **Training: Missile Evasion** on the main menu (four short lessons).
 

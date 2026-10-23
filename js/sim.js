@@ -499,6 +499,7 @@
       const o = u.order;
       if (!o) return null;
       if (o.x != null) return o;
+      if (o.type === 'attack') return o.target;
       if ((o.type === 'strike' || o.type === 'drone') && o.list && o.list.length) return this.refFor(o.list[0].kind, o.list[0].id);
       return null;
     }
@@ -1215,8 +1216,8 @@
           if (!ref || ref.kind !== 'base' || ref.side !== side || dist(e, ref) > 150) continue;
           const ready = Object.values(ref.pools).reduce((a, p) => a + p.ready, 0);
           if (!ready) continue;
-          if (side === this.player) this.promptFor('base', ref);
-          else for (const c of this.commanders) if (c.side === side) c.baseThreat(ref);
+          // The player's bases defend themselves through autoDefend(); AI bases scramble.
+          if (side !== this.player) for (const c of this.commanders) if (c.side === side) c.baseThreat(ref);
         }
       }
     }
@@ -1276,7 +1277,7 @@
     // kind: cap | aew | strike | escort | sead | attack. A CAP or AEW&C mission keeps its
     // station manned: when a flight heads home, a relief flight launches from the base.
     createMission(m) {
-      const pre = { cap: 'CAP', aew: 'AEW', strike: 'STRIKE', escort: 'ESCORT', sead: 'SEAD', attack: 'ATTACK' }[m.kind];
+      const pre = m.auto ? 'DEFEND' : { cap: 'CAP', aew: 'AEW', strike: 'STRIKE', escort: 'ESCORT', sead: 'SEAD', attack: 'ATTACK', chase: 'CHASE' }[m.kind];
       this.missionNo[pre] = (this.missionNo[pre] || 0) + 1;
       const ms = {
         id: this.nextId++, name: `${pre}-${this.missionNo[pre]}`, status: 'planned', unit: null, flights: 0,
@@ -1284,8 +1285,9 @@
       };
       if (ms.kind === 'strike' && ms.tot) ms.launchAt = this.strikeLaunchTime(ms);
       this.missions.push(ms);
+      if (ms.unit) this.bindMission(ms, ms.unit);
       this.tickMissions();
-      if (ms.side === this.player) {
+      if (ms.side === this.player && !ms.auto) {
         const when = ms.launchAt > this.t + 5 ? `, takes off at ${this.clock(ms.launchAt).slice(0, 4)}Z` : '';
         this.log(ms.side, `${ms.name} planned: ${ms.n} ${AIRCRAFT[ms.type].name} from ${ms.base}${when}`, 'info');
       }
@@ -1313,7 +1315,29 @@
       const d = dist(b, ref), launchDist = Math.min(d, w.range * 0.85);
       return Math.max(this.t, ms.launchAt) + (d - launchDist) / AIRCRAFT[ms.type].speed + launchDist / w.speed + 30;
     }
+    // Give an airborne flight a new mission (it keeps its current weapons).
+    assignMission(u, m) {
+      if (u.mission && u.mission.unit === u && u.mission.status !== 'done') u.mission.status = 'done';
+      const ms = this.createMission({ ...m, side: u.side, base: u.base, type: u.type, n: u.count, unit: u });
+      return ms;
+    }
+    bindMission(ms, u) {
+      u.mission = ms;
+      u.ai = true;
+      u.engage = null;
+      u.order = this.missionOrder(ms);
+      if (ms.kind === 'chase') u.anchor = { x: u.x, y: u.y, r: 15 };
+      if (u.order.type === 'strike' || u.order.type === 'drone') u.strikeSince = this.t;
+      ms.flights = Math.max(1, ms.flights);
+      ms.status = 'airborne';
+      if (ms.kind === 'escort') this.steerEscort(ms, u);
+    }
     missionOrder(ms) {
+      if (ms.kind === 'chase') return { type: 'attack', target: ms.prey };
+      if (ms.kind === 'strike' && ms.unit && ms.unit.state === 'air') {
+        const n = Object.entries(ms.unit.wpn).filter(([k]) => WEAPONS[k].kind === 'cruise').reduce((a, [, c]) => a + c, 0);
+        return { type: 'strike', list: [{ ...ms.target, n }] };
+      }
       if (ms.kind === 'cap' || ms.kind === 'aew') return { type: 'orbit', x: ms.at.x, y: ms.at.y, r: ms.kind === 'aew' ? 25 : 15 };
       if (ms.kind === 'sead') return { type: 'sead', x: ms.at.x, y: ms.at.y, r: 20 };
       if (ms.kind === 'attack') return { type: 'drone', list: [{ ...ms.target }] };
@@ -1331,18 +1355,20 @@
         const u = ms.unit, alive = u && u.state === 'air';
         if (alive) {
           const home = u.order && u.order.type === 'rtb';
-          ms.status = home ? 'returning' : ms.kind === 'strike' ? (u.order.type === 'strike' ? 'inbound' : 'egress') : ms.kind === 'escort' ? 'escorting' : 'on station';
+          ms.status = home ? 'returning' : ms.kind === 'strike' ? (u.order.type === 'strike' ? 'inbound' : 'egress') : ms.kind === 'escort' ? 'escorting' : ms.kind === 'chase' ? 'chasing' : 'on station';
           if (ms.kind === 'escort' && !home) this.steerEscort(ms, u);
+          if (ms.kind === 'chase' && !home) this.checkChase(ms, u);
           if (!home || !ms.repeat) continue;
         }
         const once = !ms.repeat;
         if (once && ms.flights > 0) { if (!alive) ms.status = 'done'; continue; }
         if (this.t < ms.launchAt) { ms.status = 'scheduled'; continue; }
-        if (ms.kind === 'escort') {
+        if (ms.kind === 'escort' && !ms.escortUnit) {
           const s = this.missions.find(x => x.id === ms.escortOf);
           if (!s || s.status === 'done') { ms.status = 'done'; continue; }
           if (!(s.unit && s.unit.state === 'air')) { ms.status = 'waiting for strike'; continue; }
         }
+        if (ms.kind === 'chase' && !this.isAlive(ms.prey)) { ms.status = 'done'; continue; }
         const r = this.launchFlight(ms.base, ms.type, ms.n, { order: this.missionOrder(ms), preset: ms.preset, ai: true });
         if (typeof r === 'string') { ms.status = 'waiting: ' + r.toLowerCase(); continue; }
         if (alive) u.mission = null;                   // the old flight just flies home
@@ -1351,17 +1377,69 @@
         ms.flights++;
         ms.status = 'launching';
         if (r.order.type === 'strike' || r.order.type === 'drone') r.strikeSince = this.t;
+        if (ms.kind === 'chase') { r.anchor = { x: r.x, y: r.y, r: 15 }; r.hdg = bearing(r, ms.prey); }
       }
+      this.autoDefend();
+    }
+    // A chase ends when the target is gone, lost, or has fled back into its own airspace.
+    checkChase(ms, u) {
+      const e = ms.prey;
+      const own = ms.side === this.player;
+      const end = why => {
+        ms.status = 'done';
+        this.orderRTB(u);
+        if (own) this.log(ms.side, `${ms.name}: ${why}, ${u.callsign} returning to base`, why.includes('turned') ? 'good' : 'info');
+      };
+      if (!this.isAlive(e)) return end('target no longer on radar');
+      if (!this.trackFor(ms.side, e)) return end('lost contact with the target');
+      if (e.kind === 'air' && geo.sideOf(e.x, e.y) === e.side && geo.frontierDist(e.x, e.y) > 30 && dist(u, e) > 60) {
+        return end('target turned back into its own airspace');
+      }
+      if (!this.hasAAM(u)) end('out of missiles');
+    }
+    // Ready fighters at the player's bases scramble on their own when enemies come close.
+    autoDefend() {
+      const side = this.player;
+      if (!side || !this.night || this.defending) return;
+      this.defending = true;
+      this.defendCd = this.defendCd || {};
+      const chased = new Set(this.missions.filter(m => m.side === side && m.kind === 'chase' && m.status !== 'done').map(m => m.prey));
+      for (const b of this.bases) {
+        if (b.side !== side || !this.baseOpen(b) || (this.defendCd[b.id] || 0) > this.t) continue;
+        const pool = Object.entries(b.pools).find(([ty, p]) => AIRCRAFT[ty].role === 'fighter' && PRESETS[ty].AIR && p.ready > 0);
+        if (!pool) continue;
+        let threat = null, bd = 110;
+        for (const tr of this.tracks[side].values()) {
+          const e = tr.ref;
+          if (chased.has(e) || !this.isAlive(e) || e.ghost) continue;
+          if (e.kind !== 'cruise' && e.kind !== 'air') continue;
+          if (e.kind === 'air' && e.def.role === 'aew') continue;
+          const p = this.trackPos(tr);
+          if (geo.sideOf(p.x, p.y) !== side && geo.frontierDist(p.x, p.y) > 25) continue;
+          const d = dist(b, p);
+          if (d < bd) { bd = d; threat = e; }
+        }
+        if (!threat) continue;
+        this.defendCd[b.id] = this.t + 90;
+        const ms = this.createMission({ side, kind: 'chase', auto: true, base: b.id, type: pool[0], n: Math.min(2, pool[1].ready), preset: 'AIR', prey: threat });
+        chased.add(threat);
+        if (ms.unit) {
+          const tr = this.trackFor(side, threat);
+          this.log(side, `${b.id} scrambles ${ms.unit.callsign} to intercept T${tr ? tr.num : '?'} (${threat.kind === 'cruise' ? threat.w.name : threat.def.name})`, 'warn');
+        }
+      }
+      this.defending = false;
     }
     // Escorts hold a point 20 km ahead of their strike flight, toward its target.
     steerEscort(ms, u) {
-      const s = this.missions.find(x => x.id === ms.escortOf);
-      const st = s && s.unit;
+      const s = ms.escortUnit ? null : this.missions.find(x => x.id === ms.escortOf);
+      const st = ms.escortUnit || (s && s.unit);
       if (!st || st.state !== 'air' || (st.order && st.order.type === 'rtb')) {
         if (u.order.type !== 'rtb') this.orderRTB(u);
         return;
       }
-      const ref = this.refFor(s.target.kind, s.target.id) || st;
+      const job = st.order && st.order.list && st.order.list[0];
+      const ref = (job && this.refFor(job.kind, job.id)) || (s && s.target && this.refFor(s.target.kind, s.target.id)) || st;
       const h = bearing(st, ref);
       const p = { x: st.x + Math.sin(h) * 20, y: st.y - Math.cos(h) * 20 };
       u.order = { type: 'orbit', x: p.x, y: p.y, r: 10 };

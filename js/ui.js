@@ -710,7 +710,8 @@
   function pick(sx, sy) {
     const cands = [];
     const add = (ref, x, y, kind, bias) => {
-      const p = R.toScreen(x, y);
+      // Aircraft are picked where they are drawn (a wingman in formation sits in its slot).
+      const p = ref.kind === 'air' && ref.scr && ref.scrF === R.frame ? ref.scr : R.toScreen(x, y);
       const d = Math.hypot(p.x - sx, p.y - sy);
       if (d < 26) cands.push({ ref, kind, d: d - bias });
     };

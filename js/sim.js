@@ -10,6 +10,9 @@
   const AI_FIRE = 0.75;          // fraction of max launch range used by automatic shots
   const CLOSED_AT = 60;          // base damage at which the runway closes
   const REPAIR_PER_MIN = 5;      // base damage repaired per minute
+  // Formation slots [right, back] in units of FORM_KM: lead, wingman, element lead, its wingman, ...
+  const FORMATION = [[0, 0], [-1, 1], [1.2, 0.6], [2.2, 1.6], [-2, 2], [3.2, 2.6], [-3, 3], [4.2, 3.6]];
+  const FORM_KM = 1.5;
   const EW = {
     jam: { dur: 75, cd: 360, name: 'LINK JAM' },
     barrage: { dur: 60, cd: 240, r: 120, name: 'BARRAGE JAM' },
@@ -499,18 +502,102 @@
         if (take > 0) wpn[k] = take;
       }
       p.ready -= n;
-      const u = this.newFlight(b.side, type, n, b.id);
-      u.wpn = wpn;
-      u.preset = preset;
-      u.ai = opts.ai != null ? opts.ai : b.side !== this.player;
       const order = opts.order || this.defaultOrbit(b);
-      u.order = this.cloneOrder(order);
-      const aim = order.x != null ? order : this.orderPoint(u) || b;
-      u.hdg = bearing(b, aim) || u.hdg;
-      if (u.ai && u.order.type === 'orbit') u.cap = { x: u.order.x, y: u.order.y, r: u.order.r || 15 };
-      if (u.order.type === 'strike' || u.order.type === 'drone') u.strikeSince = this.t;
-      if (b.side === this.player) this.log(b.side, `${u.callsign}: ${n} ${def.name} airborne from ${b.id}`, 'info');
-      return u;
+      // Fighters fly as individual aircraft: a lead and wingmen who keep formation on it
+      // while they share its task, but can fight, evade and be re-tasked on their own.
+      const each = def.role === 'fighter' ? n : 1;
+      const jobs = order.type === 'strike' ? this.splitStrike(order, each, wpn) : null;
+      let lead = null;
+      for (let i = 0; i < each; i++) {
+        const u = this.newFlight(b.side, type, def.role === 'fighter' ? 1 : n, b.id, lead ? `${lead.callsign}.${i + 1}` : null);
+        u.wpn = {};
+        for (const [k, c] of Object.entries(wpn)) {
+          const share = Math.floor(c / each) + (i < c % each ? 1 : 0);
+          if (share > 0) u.wpn[k] = share;
+        }
+        u.preset = preset;
+        u.ai = opts.ai != null ? opts.ai : b.side !== this.player;
+        u.order = jobs ? { type: 'strike', list: jobs[i] } : this.cloneOrder(order);
+        const aim = order.x != null ? order : this.orderPoint(u) || b;
+        u.hdg = bearing(b, aim) || u.hdg;
+        if (u.ai && u.order.type === 'orbit') u.cap = { x: u.order.x, y: u.order.y, r: u.order.r || 15 };
+        if (u.order.type === 'strike' || u.order.type === 'drone') u.strikeSince = this.t;
+        if (lead) {
+          u.lead = lead; u.slot = i;
+          // Wingmen take off a few seconds behind the lead.
+          u.x -= Math.sin(u.hdg) * i * 1.5; u.y += Math.cos(u.hdg) * i * 1.5;
+          lead.wing.push(u);
+        } else { lead = u; u.wing = []; }
+      }
+      if (b.side === this.player) this.log(b.side, `${lead.callsign}: ${n} ${def.name} airborne from ${b.id}`, 'info');
+      return lead;
+    }
+    // Share a strike order's targets out between the jets of a flight: each jet takes
+    // the jobs in turn, with all of its own strike weapons spread over them.
+    splitStrike(order, each, wpn) {
+      const list = order.list;
+      const cruise = Object.entries(wpn).filter(([k]) => WEAPONS[k].kind === 'cruise').reduce((a, [, c]) => a + c, 0);
+      const per = Math.max(1, Math.floor(cruise / each));
+      const out = [];
+      for (let i = 0; i < each; i++) {
+        const mine = list.length >= each ? list.filter((x, j) => j % each === i) : [list[i % list.length]];
+        const n = Math.max(1, Math.floor(per / mine.length));
+        out.push(mine.map(x => ({ kind: x.kind, id: x.id, n })));
+      }
+      return out;
+    }
+
+    // ---------- formations ----------
+    // A wingman shares its lead's task (same order object), unless it is on its own strike
+    // run, or has gone home on its own (fuel, weapons).
+    formSync(u) {
+      let L = u.lead;
+      if (L && (L.state !== 'air' || L.lead)) { this.regroup(L); L = u.lead; }
+      if (!L) return;
+      if (u.mission !== L.mission || (u.order && u.order.type === 'rtb' && u.order !== L.order)) { u.lead = null; return; }
+      if (!u.order || u.order.type !== 'strike') {
+        u.order = L.order;
+        if (L.cap) u.cap = L.cap;
+        if (L.anchor) u.anchor = L.anchor;
+      }
+    }
+    // Is this wingman flying in formation right now (same target, nothing else to do)?
+    inFormation(u) {
+      const L = u.lead;
+      if (!L || L.state !== 'air' || u.engage || u.firing || u.defending || dist(u, L) > 120) return false;
+      const o = u.order, lo = L.order;
+      if (!o || !lo) return false;
+      if (o.type === 'strike') return lo.type === 'strike' && !L.firing && o.list.length > 0 && lo.list.length > 0 && o.list[0].id === lo.list[0].id;
+      if (o !== lo) return false;
+      if (o.type === 'attack') return this.isAlive(o.target) && dist(u, o.target) > this.bestRange(u) * 1.2;
+      return true;
+    }
+    // Fly to the slot: off the lead's wing, a little behind, matching its speed.
+    formSteer(u) {
+      const L = u.lead, k = FORMATION[u.slot % FORMATION.length];
+      const fx = Math.sin(L.hdg), fy = -Math.cos(L.hdg);
+      const sx = L.x - fy * k[0] * FORM_KM - fx * k[1] * FORM_KM, sy = L.y + fx * k[0] * FORM_KM - fy * k[1] * FORM_KM;
+      const along = (sx - u.x) * fx + (sy - u.y) * fy;
+      const spd = clamp(L.spd + along * 0.03, L.def.speed * 0.75, u.def.dash);
+      return { hdg: bearing(u, { x: sx + fx * 6, y: sy + fy * 6 }), spd };
+    }
+    // The lead has gone (shot down, landed, or given another task): the next wingman leads.
+    regroup(L) {
+      const fol = this.units.filter(u => u.lead === L && u.state === 'air').sort((a, b) => a.slot - b.slot);
+      if (!fol.length) return;
+      const nl = fol[0];
+      nl.lead = null; nl.slot = 0; nl.wing = fol.slice(1);
+      fol.slice(1).forEach((u, i) => { u.lead = nl; u.slot = i + 1; });
+      const ms = L.mission;
+      if (ms && ms.unit === L && ms.status !== 'done' && nl.mission === ms) ms.unit = nl;
+      for (const m of this.missions) if (m.escortUnit === L) m.escortUnit = nl;
+      if (L.offensive) nl.offensive = true;
+      for (const c of this.commanders) for (const x of [...c.caps, ...c.aews]) if (x.unit === L) x.unit = nl;
+    }
+    // Take a jet out of its formation (it has been given its own task).
+    detach(u) {
+      if (this.units.some(w => w.lead === u)) this.regroup(u);
+      u.lead = null; u.inForm = false;
     }
     defaultOrbit(b) {
       // Hold 25 km off the base, toward the frontier.
@@ -527,6 +614,7 @@
     }
     land(u, b) {
       u.state = 'landed';
+      this.regroup(u);
       u.threats = []; u.defending = false;
       const p = b.pools[u.type] || (b.pools[u.type] = { ready: 0, rearm: [] });
       if (!b.preset[u.type]) b.preset[u.type] = Object.keys(PRESETS[u.type])[0];
@@ -603,6 +691,7 @@
       const def = u.def;
       if (u.ghost) { this.updateGhost(u, dt); return; }
       if (def.role === 'drone') { this.updateDrone(u, dt); return; }
+      if (u.lead) this.formSync(u);
       // Threat assessment.
       u.threats = u.threats.filter(m => !m.dead && m.target === u);
       const holding = u.holdUntil > this.t;
@@ -656,9 +745,12 @@
           this.fx.push({ kind: 'chaff', x: u.x, y: u.y, t: this.t });
         }
       } else {
-        const r = this.steer(u);
+        let r = this.steer(u);
+        u.inForm = u.state === 'air' && this.inFormation(u);
+        if (u.inForm) r = this.formSteer(u);
         want = r.hdg; spd = r.spd;
       }
+      if (u.defending) u.inForm = false;
       if (u.state !== 'air') return; // landed during steer
       this.move(u, want, spd, dt, u.defending ? 1.3 : 1);
       if (u.salvo) this.fireSalvo(u);
@@ -705,7 +797,7 @@
       if (!u.ai || u.def.role === 'drone') return h;
       // Strike flights and their escorts are allowed into enemy airspace.
       // So are the commander's fighter sweeps and raids (u.offensive).
-      if (u.offensive || (u.order && u.order.type === 'strike') || (u.mission && u.mission.kind === 'escort')) return h;
+      if (u.offensive || (u.lead && u.lead.offensive) || (u.order && u.order.type === 'strike') || (u.mission && u.mission.kind === 'escort')) return h;
       const ok = hh => {
         const x = u.x + Math.sin(hh) * 25, y = u.y - Math.cos(hh) * 25;
         return geo.sideOf(x, y) === u.side && geo.frontierDist(x, y) > 10;
@@ -765,7 +857,7 @@
       const maxR = w.range * 0.85;
       // Hold in safe airspace until an assigned escort has joined up (up to 7 minutes).
       if (!u.firing) {
-        const esc = this.missions.find(m => m.kind === 'escort' && m.status !== 'done' && (m.escortUnit === u || (u.mission && m.escortOf === u.mission.id)));
+        const esc = this.missions.find(m => m.kind === 'escort' && m.status !== 'done' && (m.escortUnit === u || (u.lead && m.escortUnit === u.lead) || (u.mission && m.escortOf === u.mission.id)));
         const e = esc && esc.unit;
         if (esc && !(e && e.state === 'air' && dist(e, u) < 25)) {
           u.waitSince = u.waitSince || this.t;
@@ -777,7 +869,7 @@
       // Press in as close as possible; fire early only if threatened.
       // An escort flying with the striker keeps it pressing in; a missile at it never does.
       const escorted = this.units.some(e => e.side === u.side && e.state === 'air' && e.mission && e.mission.kind === 'escort' && e.mission.status !== 'done' &&
-        (e.mission.escortUnit === u || (u.mission && e.mission.escortOf === u.mission.id)) && this.hasAAM(e) && dist(e, u) < 40);
+        (e.mission.escortUnit === u || (u.lead && e.mission.escortUnit === u.lead) || (u.mission && e.mission.escortOf === u.mission.id)) && this.hasAAM(e) && dist(e, u) < 40);
       const threatened = u.threats.length > 0 || (!escorted && this.enemyFightersNear(u, 55));
       if (u.firing || d <= Math.min(maxR, 25) || (threatened && d <= maxR)) {
         if (!u.firing) {
@@ -1140,7 +1232,7 @@
       u.count -= n;
       this.score[u.side].lost += n;
       this.log(u.side, `${u.callsign}: ${u.def.name} LOST, ${why}`, 'loss');
-      if (u.count <= 0) { u.state = 'dead'; u.threats = []; }
+      if (u.count <= 0) { u.state = 'dead'; u.threats = []; this.regroup(u); }
     }
 
     launchCruise(u, k, ref) {
@@ -1339,6 +1431,7 @@
 
     // ---------- player commands ----------
     cmdMove(u, x, y) {
+      this.detach(u);
       if (u.mission && u.mission.at) u.mission.at = { x, y };
       if (this.isDrone(u)) { u.order = { type: u.def.mission === 'sead' ? 'sead' : 'orbit', x, y, r: 20 }; return; }
       u.order = { type: 'orbit', x, y, r: u.def.role === 'aew' ? 25 : 15 };
@@ -1346,6 +1439,7 @@
       if (u.ai) u.cap = { x, y, r: 15 };
     }
     cmdAttack(u, t) {
+      this.detach(u);
       if (u.ai && u.cap && u.order && u.order.type === 'orbit') {
         // A patrol keeps its station: engage, then return to it.
         u.engage = t;
@@ -1357,6 +1451,7 @@
       u.engage = null;
     }
     cmdStrike(u, ref) {
+      this.detach(u);
       const id = this.targetId(ref);
       if (this.isDrone(u)) { u.order = { type: 'drone', list: [{ kind: ref.kind, id }] }; return true; }
       const wk = this.strikeWeapon(u);
@@ -1366,7 +1461,7 @@
       u.engage = null;
       return true;
     }
-    cmdRTB(u) { this.orderRTB(u); }
+    cmdRTB(u) { this.detach(u); this.orderRTB(u); }
     // Manual defence: 'drag' (BREAK), 'notch', or null to hand back to automatic.
     cmdDefend(u, mode) {
       u.manualDef = mode ? { mode, until: this.t + 45 } : null;
@@ -1418,6 +1513,7 @@
     }
     // Give an airborne flight a new mission (it keeps its current weapons).
     assignMission(u, m) {
+      this.detach(u);
       if (u.mission && u.mission.unit === u && u.mission.status !== 'done') u.mission.status = 'done';
       const ms = this.createMission({ ...m, side: u.side, base: u.base, type: u.type, n: u.count, unit: u });
       return ms;
@@ -1475,6 +1571,7 @@
         if (typeof r === 'string') { ms.status = 'waiting: ' + r.toLowerCase(); continue; }
         if (alive) u.mission = null;                   // the old flight just flies home
         r.mission = ms;
+        for (const w of r.wing || []) { w.mission = ms; if (ms.kind === 'chase') w.anchor = { x: w.x, y: w.y, r: 15 }; }
         ms.unit = r;
         ms.flights++;
         ms.status = 'launching';
@@ -1684,5 +1781,5 @@
     }
   }
 
-  Object.assign(KC, { Sim, EW, util: { clamp, angNorm, dist, bearing, vel, DEG, ENEMY } });
+  Object.assign(KC, { Sim, EW, FORMATION, FORM_KM, util: { clamp, angNorm, dist, bearing, vel, DEG, ENEMY } });
 })(globalThis.KC);

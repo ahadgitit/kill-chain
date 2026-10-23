@@ -28,8 +28,6 @@
     for (let i = pts.length - 1; i >= 0; i--) if (pts[i][0]) c.lineTo(-pts[i][0], pts[i][1]);
     c.closePath();
   }
-  // Formation slots [right, back] in jet spacings: lead, wingman, element lead, its wingman, then a widening V.
-  const FORMATION = [[0, 0], [-1, 1], [1.2, 0.6], [2.2, 1.6], [-2, 2], [3.2, 2.6], [-3, 3], [4.2, 3.6]];
   const ease = t => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 
   class Renderer {
@@ -169,6 +167,7 @@
 
     // ---------- frame ----------
     draw(sim, ui) {
+      this.frame = (this.frame || 0) + 1;
       this.stepFlight();
       this.clampView();
       const c = this.ctx;
@@ -621,73 +620,51 @@
 
     // A flight drawn as individual jets in formation (fingertip / finger-four, then a widening V).
     // Returns the screen half-width of the formation so labels can clear it.
-    drawFlight(u, n, p, col, opts, dmg) {
-      u.jetOff = null;
-      if (u.def.role !== 'fighter' || n <= 1) {
-        this.glyph('air', u.def.role, p.x, p.y, u.hdg, col, { ...opts, type: u.type });
-        return 0;
-      }
-      const slots = FORMATION.slice(0, Math.min(n, FORMATION.length));
-      const sp = 9 * Math.max(0.8, Math.min(1.5, Math.sqrt(this.view.scale)));
-      let mx = 0, my = 0;
-      for (const [a, b] of slots) { mx += a; my += b; }
-      mx /= slots.length; my /= slots.length;
-      const fx = Math.sin(u.hdg), fy = -Math.cos(u.hdg);
-      // Missile defence, the same way every time: the flight opens out, each jet turning
-      // away to its own side to a fixed spread (about two slot widths), weaving gently while
-      // defending, then turning back in and closing up into its slot. The flight itself flies
-      // the real evasion (the sim turns it away from the missile); this only shows the jets
-      // spreading out and rejoining around it. Time only runs while the sim does.
+    // Where to draw an aircraft. A wingman flying in formation is ~2 km off its lead,
+    // which is less than a pixel apart at most zooms, so on screen it is drawn in its
+    // slot a few icon-widths off the lead instead (eased in and out as it joins or leaves).
+    formPos(u, p, q) {
       const now = performance.now();
-      const moved = this.simT !== u.visSimT;
-      const dt = moved ? Math.min(0.05, (now - (u.visT || now)) / 1000) : 0;
-      u.visT = now; u.visSimT = this.simT;
-      if (u.defending) u.brkUntil = now + 2000;            // hold the break at least 2 s on screen
-      const out = u.defending || now < (u.brkUntil || 0);
-      const s0 = u.brk || 0;
-      // Open out in ~0.6 s, close up in ~1.6 s.
-      u.brk = out ? Math.min(1, s0 + dt / 0.6) : Math.max(0, s0 - dt / 1.6);
-      const ds = dt ? (u.brk - s0) / dt : 0;
-      const s = ease(u.brk);
-      u.brkPh = (u.brkPh || 0) + dt;
-      let half = 0;
-      slots.forEach(([a, b], i) => {
-        const dir = i % 2 ? -1 : 1, row = Math.floor(i / 2);
-        // Spread: lead pair goes ~1.6 slots out to each side, the second pair a little wider and back.
-        const wph = u.brkPh * 2.2 + i * 1.3;
-        const lx = (a - mx) * sp + s * dir * sp * (1.6 + row * 0.5) + s * Math.sin(wph) * sp * 0.25;
-        const ly = (b - my) * sp + s * row * sp * 0.6;
-        const x = p.x + fy * -lx + -fx * ly, y = p.y + fx * lx + -fy * ly;
-        half = Math.max(half, Math.abs(x - p.x), Math.abs(y - p.y));
-        // Nose follows the motion: out while spreading, back in while rejoining, a gentle weave between.
-        const turn = Math.max(-1.1, Math.min(1.1, dir * ds * 0.9 + s * Math.cos(wph) * 0.3));
-        const h = u.hdg + turn;
-        // The last jet in the formation carries the damage, and it is the jet that
-        // missiles fired at this flight home on (so a kill removes the jet that was hit).
-        const hurt = dmg && i === slots.length - 1;
-        if (i === slots.length - 1) u.jetOff = { x: x - p.x, y: y - p.y };
-        this.glyph('air', 'fighter', x, y, h, hurt ? COL.hot : col, { ...opts, type: u.type, size: 0.8, hollow: opts.hollow || hurt });
-      });
-      return half;
+      const dt = Math.min(0.1, (now - (u.fwT || now)) / 1000);
+      u.fwT = now;
+      u.fw = (u.fw || 0) + ((u.inForm ? 1 : 0) - (u.fw || 0)) * Math.min(1, dt * 2.5);
+      if (!q || u.fw < 0.01) return p;
+      const L = u.lead, k = KC.FORMATION[u.slot % KC.FORMATION.length], SP = 13;
+      const fx = Math.sin(L.hdg), fy = -Math.cos(L.hdg);
+      const tx = q.x - fy * k[0] * SP - fx * k[1] * SP, ty = q.y + fx * k[0] * SP - fy * k[1] * SP;
+      // Zoomed in far enough to see the real spacing: draw the real position.
+      const gap = Math.hypot(p.x - q.x, p.y - q.y) - Math.hypot(tx - q.x, ty - q.y);
+      const w = ease(u.fw) * Math.max(0, Math.min(1, 1 - gap / 40));
+      return { x: p.x + (tx - p.x) * w, y: p.y + (ty - p.y) * w };
+    }
+    // Wingmen currently flying in formation on each lead.
+    formCounts(sim) {
+      const n = new Map();
+      for (const u of sim.units) if (u.kind === 'air' && u.state === 'air' && u.lead && u.inForm) n.set(u.lead, (n.get(u.lead) || 0) + 1);
+      return n;
     }
 
     drawUnits(sim, side, ui) {
       const c = this.ctx;
       this.simT = sim.t;
       const showLabels = this.view.scale > 0.45;
+      const wing = this.formCounts(sim);
       for (const u of sim.units) {
         if (u.side !== side) continue;
         if (u.kind === 'air' && u.state !== 'air') continue;
-        const p = this.toScreen(u.x, u.y);
-        if (p.x < -40 || p.x > this.w + 40 || p.y < -40 || p.y > this.h + 40) continue;
+        const real = this.toScreen(u.x, u.y);
+        if (real.x < -60 || real.x > this.w + 60 || real.y < -60 || real.y > this.h + 60) continue;
+        const p = u.kind === 'air' && u.lead ? this.formPos(u, real, this.toScreen(u.lead.x, u.lead.y)) : real;
+        if (u.kind === 'air') { u.jetOff = { x: p.x - real.x, y: p.y - real.y }; u.scr = p; u.scrF = this.frame; }
+        const tucked = u.kind === 'air' && u.lead && u.inForm;
         const col = COL[side];
         const sel = ui.sel && ui.sel.ref === u;
         if (u.kind === 'air' && u.defending && Math.floor(sim.t * 2) % 2 === 0) {
           c.strokeStyle = COL.site; c.lineWidth = 1.5;
           c.beginPath(); c.arc(p.x, p.y, 13, 0, Math.PI * 2); c.stroke();
         }
-        // Short velocity leader for aircraft
-        if (u.kind === 'air') {
+        // Short velocity leader for aircraft (one per formation)
+        if (u.kind === 'air' && !tucked) {
           c.strokeStyle = col; c.globalAlpha = 0.45; c.lineWidth = 1;
           const L = 10 + u.spd * 40;
           c.beginPath(); c.moveTo(p.x + Math.sin(u.hdg) * 9, p.y - Math.cos(u.hdg) * 9);
@@ -695,10 +672,11 @@
           c.globalAlpha = 1;
         }
         if (u.dead) { this.wreck(p, u.callsign); continue; }
-        let half = 0;
-        if (u.kind === 'air') half = this.drawFlight(u, u.count, p, col, { hollow: !u.radarOn, glow: !u.ghost, dashed: u.ghost }, u.dmg > 0);
+        const half = 0;
+        // A damaged jet (one more hit downs it) is drawn amber.
+        if (u.kind === 'air') this.glyph('air', u.def.role, p.x, p.y, u.hdg, u.dmg > 0 ? COL.hot : col, { hollow: !u.radarOn || u.dmg > 0, glow: !u.ghost, dashed: u.ghost, type: u.type });
         else this.glyph(u.kind, u.def.role, p.x, p.y, u.hdg, col, { dashed: !u.radarOn });
-        const lx = p.x + 11 + Math.max(0, half - 4);
+        const lx = p.x + 11;
         if (u.kind === 'air' && u.defending) this.label(u.defMode === 'notch' ? 'NOTCH' : 'DRAG', p.x - 11, p.y + 14, COL.site, 'right', 9);
         if (sel) {
           c.strokeStyle = COL.white; c.lineWidth = 1;
@@ -709,8 +687,9 @@
           }
           c.stroke();
         }
-        if (u.kind === 'air' && (showLabels || sel)) {
-          const tag = `${u.callsign}${u.count > 1 ? ' ×' + u.count : ''}`;
+        if (u.kind === 'air' && (showLabels || sel) && (!tucked || sel)) {
+          const n = u.count + (wing.get(u) || 0);
+          const tag = `${u.callsign}${n > 1 ? ' ×' + n : ''}`;
           this.label(tag, lx, p.y - 5, u.ghost ? COL.dim : col, 'left', 10);
           if (sel || this.view.scale > 1.1) this.label(u.def.name, lx, p.y + 6, COL.dim, 'left', 9);
         } else if (u.kind !== 'air' && (this.view.scale > 0.9 || sel)) {
@@ -808,29 +787,39 @@
       const c = this.ctx;
       this.simT = sim.t;
       const col = COL[KC.util.ENEMY[side]];
-      for (const tr of sim.tracks[side].values()) {
+      const table = sim.tracks[side];
+      // Tracked wingmen tucked in on a tracked lead (drawn in formation, counted on the lead's label).
+      const wing = new Map();
+      for (const tr of table.values()) {
+        const e = tr.ref;
+        if (e.kind === 'air' && e.lead && e.inForm && tr.q !== 'esm' && table.has(e.lead.id)) wing.set(e.lead, (wing.get(e.lead) || 0) + 1);
+      }
+      for (const tr of table.values()) {
         if (tr.kind === 'cruise') continue; // drawn as missiles
         const pos = tr.static ? tr : sim.trackPos(tr);
-        const p = this.toScreen(pos.x, pos.y);
-        if (p.x < -40 || p.x > this.w + 40 || p.y < -40 || p.y > this.h + 40) continue;
+        const real = this.toScreen(pos.x, pos.y);
+        if (real.x < -60 || real.x > this.w + 60 || real.y < -60 || real.y > this.h + 60) continue;
         const stale = sim.t - tr.t > 3 && !tr.static;
         const e = tr.ref;
         c.globalAlpha = stale ? 0.45 : 1;
         const esm = tr.q === 'esm';
-        let half = 0;
+        const ltr = e.kind === 'air' && e.lead && !esm ? table.get(e.lead.id) : null;
+        const p = ltr ? this.formPos(e, real, this.toScreen(sim.trackPos(ltr).x, sim.trackPos(ltr).y)) : real;
+        if (e.kind === 'air') { e.jetOff = { x: p.x - real.x, y: p.y - real.y }; e.scr = p; e.scrF = this.frame; }
+        const tucked = !!ltr && e.inForm;
+        const half = 0;
         if (e.kind === 'air') {
-          // A passive (emission-only) track can't resolve how many jets there are.
-          half = this.drawFlight(e, esm ? 1 : (tr.count || e.count), p, col, { hollow: true, dashed: esm, glow: !esm && !stale }, false);
+          this.glyph('air', e.def.role, p.x, p.y, e.hdg, col, { hollow: true, dashed: esm, glow: !esm && !stale, type: e.type });
           if (esm) { c.strokeStyle = col; c.beginPath(); c.arc(p.x, p.y, 10, 0, Math.PI * 2); c.setLineDash([2, 3]); c.stroke(); c.setLineDash([]); }
         } else if (e.dead) { this.wreck(p, e.callsign); c.globalAlpha = 1; continue; }
         else this.glyph(e.kind, null, p.x, p.y, 0, col, {});
         const sel = ui.sel && ui.sel.ref === e;
         if (sel) { c.strokeStyle = COL.white; c.strokeRect(p.x - 11 - half, p.y - 11 - half, 22 + half * 2, 22 + half * 2); }
         if (e.kind === 'air') {
-          const n = tr.count || e.count;
+          const n = (tr.count || e.count) + (wing.get(e) || 0);
           const name = esm ? `${e.def.name}?` : `${e.def.name}${n > 1 ? ' ×' + n : ''}`;
-          if (this.view.scale > 0.3 || sel) this.label(`T${tr.num} ${name}`, p.x + 11 + Math.max(0, half - 4), p.y - 5, col, 'left', 10);
-          if (tr.striker && !stale) this.strikerMark(sim, tr, p);
+          if ((this.view.scale > 0.3 && !tucked) || sel) this.label(`T${tr.num} ${name}`, p.x + 11, p.y - 5, col, 'left', 10);
+          if (tr.striker && !stale && !tucked) this.strikerMark(sim, tr, p);
         } else if (this.view.scale > 0.9 || sel) this.label(e.callsign, p.x + 9, p.y, COL.dim, 'left', 9);
         c.globalAlpha = 1;
       }

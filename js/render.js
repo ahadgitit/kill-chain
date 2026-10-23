@@ -30,6 +30,12 @@
   }
   // Formation slots [right, back] in jet spacings: lead, wingman, element lead, its wingman, then a widening V.
   const FORMATION = [[0, 0], [-1, 1], [1.2, 0.6], [2.2, 1.6], [-2, 2], [3.2, 2.6], [-3, 3], [4.2, 3.6]];
+  // Visual speeds (screen px/s) for jets manoeuvring around their flight.
+  const VF = 20, VMAX = 34;
+  // Break plans per jet in a formation: [side, break turn (deg), jinking line off the flight's heading (deg)].
+  // Two jets breaking to the same side use very different lines, so they don't bunch up.
+  const BREAKS = [[1, 95, 75], [-1, 110, 80], [1, 150, 20], [-1, 140, 25], [1, 70, 50], [-1, 75, 50], [1, 120, 100], [-1, 125, 100]];
+  const angDiff = (a, b) => Math.atan2(Math.sin(a - b), Math.cos(a - b));
   const ease = t => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 
   class Renderer {
@@ -618,33 +624,84 @@
       for (const [a, b] of slots) { mx += a; my += b; }
       mx /= slots.length; my /= slots.length;
       const fx = Math.sin(u.hdg), fy = -Math.cos(u.hdg);
-      // Missile defence: the jets break apart in opposite directions, then rejoin once it's over.
-      // brk eases towards 1 quickly while defending and back to 0 slowly afterwards.
-      const ms = performance.now();
-      const dt = Math.min(0.1, (ms - (u.brkT || ms)) / 1000);
-      u.brkT = ms;
-      u.brk = u.brk || 0;
-      u.brk += u.defending ? (1 - u.brk) * Math.min(1, dt * 4) : -u.brk * Math.min(1, dt * 0.9);
-      if (u.brk < 0.01) u.brk = 0;
-      const brk = ease(u.brk);
+      // Each jet flies on its own, as an offset (screen px) from the flight's position.
+      // In formation it sits in its slot. When the flight is defending against a missile,
+      // every jet breaks hard to its own side, then jinks; afterwards it flies a pursuit
+      // curve back to its slot and settles in. Time only runs while the sim does.
+      const now = performance.now();
+      const moved = this.simT !== u.visSimT;
+      const dt = moved ? Math.min(0.05, (now - (u.visT || now)) / 1000) : 0;
+      u.visT = now; u.visSimT = this.simT;
+      if (!u.vis || u.vis.length !== slots.length) u.vis = slots.map((s, i) => (u.vis && u.vis[i]) || { ox: 0, oy: 0, h: u.hdg, v: VF, mode: 'slot' });
       let half = 0;
       slots.forEach(([a, b], i) => {
-        // Lead and wingman split to opposite sides; later jets fan out further.
-        const sgn = i % 2 ? -1 : 1, fan = 1 + Math.floor(i / 2) * 0.6;
-        const weave = Math.sin(ms / 420 + i * 1.7) * 0.35;
-        const lx = (a - mx) * sp + sgn * fan * sp * 2.4 * brk, ly = (b - my) * sp + (i % 3) * sp * 0.8 * brk;
-        const x = p.x + fy * -lx + -fx * ly, y = p.y + fx * lx + -fy * ly;
-        const hdg = u.hdg + (sgn * 0.8 + weave) * brk;
-        half = Math.max(half, Math.abs(x - p.x), Math.abs(y - p.y));
+        const lx = (a - mx) * sp, ly = (b - my) * sp;
+        const slot = { x: fy * -lx + -fx * ly, y: fx * lx + -fy * ly };
+        half = Math.max(half, Math.abs(slot.x), Math.abs(slot.y));
+        const j = u.vis[i];
+        if (j.mode === 'slot' && !moved) { j.ox = slot.x; j.oy = slot.y; j.h = u.hdg; }
+        this.flyJet(u, j, i, slot, dt, now);
         // The last jet in the formation carries the damage.
         const hurt = dmg && i === slots.length - 1;
-        this.glyph('air', 'fighter', x, y, hdg, hurt ? COL.hot : col, { ...opts, type: u.type, size: 0.8, hollow: opts.hollow || hurt });
+        this.glyph('air', 'fighter', p.x + j.ox, p.y + j.oy, j.h, hurt ? COL.hot : col, { ...opts, type: u.type, size: 0.8, hollow: opts.hollow || hurt });
       });
       return half;
     }
 
+    // One jet's visual flight relative to its flight (see drawFlight).
+    flyJet(u, j, i, slot, dt, now) {
+      const H = u.hdg;
+      if (u.defending && j.mode !== 'evade') {
+        // Break: lead and wingman to opposite sides, each a little differently.
+        j.mode = 'evade'; j.since = now;
+        // Each jet has its own manoeuvre: break side, how hard, and jink rhythm.
+        const plan = BREAKS[i % BREAKS.length];
+        j.dir = plan[0];
+        j.brk = H + j.dir * (plan[1] + Math.random() * 20) * Math.PI / 180;
+        j.beam = plan[2] * Math.PI / 180;
+        j.jink = 0.8 + Math.random() * 0.7;
+        j.ph = Math.random() * 6;
+      }
+      if (j.mode === 'evade' && !u.defending && now - j.since > 2500) j.mode = 'rejoin';
+      if (j.mode === 'slot') {
+        // Sit in the slot, following the flight's turns smoothly.
+        j.ox = slot.x; j.oy = slot.y;
+        j.h += angDiff(H, j.h) * Math.min(1, dt * 6);
+        j.v = VF;
+        return;
+      }
+      if (!dt) return;
+      let want, v;
+      const off = Math.hypot(j.ox, j.oy);
+      if (j.mode === 'evade') {
+        const age = (now - j.since) / 1000;
+        if (age < 1.3) want = j.brk;                       // hard break turn
+        else want = H + j.dir * j.beam + Math.sin(age * 2 * Math.PI / j.jink + j.ph) * 0.5;  // jinking on its own line
+        // Far enough out on its side: reverse, a gentle turn back toward the flight's line
+        // (still on its own side), then weave out again.
+        const side = j.ox * Math.cos(H) + j.oy * Math.sin(H);   // + = right of the flight
+        if (Math.abs(side) > 45 && Math.sign(side) === j.dir) want = H - j.dir * 0.35 + Math.sin(age * 4 + j.ph) * 0.25;
+        v = VMAX;
+      } else {
+        // Rejoin: pursue the slot. Fly the flight's velocity plus a correction toward the slot.
+        const ex = slot.x - j.ox, ey = slot.y - j.oy, e = Math.hypot(ex, ey);
+        const k = Math.min(1.8, 0.8 + e / 40);
+        const tx = Math.sin(H) * VF + ex * k, ty = -Math.cos(H) * VF + ey * k;
+        want = Math.atan2(tx, -ty);
+        v = Math.max(VF * 0.85, Math.min(VMAX * 1.2, Math.hypot(tx, ty)));
+        if (e < 1.5 && Math.abs(angDiff(H, j.h)) < 0.15) { j.mode = 'slot'; return; }
+      }
+      const turn = (j.mode === 'evade' ? 150 : 90) * Math.PI / 180 * dt;
+      j.h += Math.max(-turn, Math.min(turn, angDiff(want, j.h)));
+      j.v += (v - j.v) * Math.min(1, dt * 3);
+      // Move relative to the flight (which itself flies H at VF on screen).
+      j.ox += (Math.sin(j.h) * j.v - Math.sin(H) * VF) * dt;
+      j.oy += (-Math.cos(j.h) * j.v + Math.cos(H) * VF) * dt;
+    }
+
     drawUnits(sim, side, ui) {
       const c = this.ctx;
+      this.simT = sim.t;
       const showLabels = this.view.scale > 0.45;
       for (const u of sim.units) {
         if (u.side !== side) continue;
@@ -777,6 +834,7 @@
 
     drawTracks(sim, side, ui) {
       const c = this.ctx;
+      this.simT = sim.t;
       const col = COL[KC.util.ENEMY[side]];
       for (const tr of sim.tracks[side].values()) {
         if (tr.kind === 'cruise') continue; // drawn as missiles

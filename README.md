@@ -38,7 +38,7 @@ It works on desktop and mobile (touch), with no install and no build step.
 - **Decision card.** At 80% escalation you choose: stand down strikes, or press on.
 - **Fog of war.** Kills are only *claimed* during the night. The debrief shows claimed against confirmed.
 - **Escalation.** Strikes and kills raise a shared meter. At 100% both sides lose. Night 4 ends in a ceasefire.
-- **Formations.** Every aircraft is drawn individually with its own silhouette (delta wing for Rafale, Mirage and J-10; swept wing for Su-30, MiG-29, JF-17 and F-16), and a flight of several jets flies in formation. When a missile threatens the flight, the jets break apart in different directions to defend, then rejoin the formation once the threat is over. A damaged jet turns amber.
+- **Formations.** Every aircraft is drawn individually with its own silhouette (delta wing for Rafale, Mirage and J-10; swept wing for Su-30, MiG-29, JF-17 and F-16), and a flight of several jets flies in formation. When a missile threatens the flight, each jet flies its own evasion: a hard break turn to its side, then jinking and reversals, and afterwards it flies a pursuit curve back into its slot. A damaged jet turns amber.
 - **After-action replay.** Watch the whole night from both sides.
 - **Sound.** All synthesised in the browser (no audio files): a sonar-style radar ping with echoes and faint contact returns over a quiet low pad, missile launch whoosh, warning tones (launch warning, missile active), lock tone, air and ground explosions, jet take-off roar and a striker alarm. 🔊 in the top bar or on the menu mutes it.
 - **Scoring.**

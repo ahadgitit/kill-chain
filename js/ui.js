@@ -174,7 +174,7 @@
         <div><div class="h2">YOUR PRIORITY TARGETS</div>${mine.length ? '<ul class="tlist">' + mine.map(o => `<li>${targetLabel(o)}</li>`).join('') + '</ul><p class="k">10 points each.</p>' : '<p class="k">None tonight: your job is to defend.</p>'}</div>
         <div><div class="h2">ENEMY TARGETS TO DEFEND</div>${theirs.length ? '<ul class="tlist">' + theirs.map(o => `<li>${targetLabel(o)}</li>`).join('') + '</ul><p class="k">8 points for each one still untouched at the end.</p>' : '<p class="k">The enemy is defending tonight.</p>'}</div>
       </div>
-      <p class="k"><b>Also scores:</b> enemy aircraft shot down (their value), other enemy bases or air defences hit (6), aircraft destroyed on the ground (half value), strike weapons intercepted (3), drones (1). Escalation at 100% means <b>both sides lose</b>.</p>
+      <p class="k"><b>How targets work:</b> every target needs <b>3 hits</b> to be destroyed, and you score for each hit (a priority target is worth 10 when destroyed). Aircraft go down after <b>2 missile hits</b>. <b>Also scores:</b> enemy aircraft shot down (their value), other enemy bases or air defences (up to 6), aircraft destroyed on the ground (half value), strike weapons intercepted (3), drones (1). Escalation at 100% means <b>both sides lose</b>.</p>
       <p class="k"><b>Your forces:</b> ${forces || 'none'}. Up to ${AIR_CAP[side]} aircraft can be airborne at once.</p>
       <p class="tip">💡 ${tip}</p>
       <div class="sides">
@@ -219,7 +219,7 @@
       saveCampaign();
     }
     const row = (k, a, b) => `<tr><td>${k}</td><td>${a}</td><td>${b}</td></tr>`;
-    const objRows = side => sim.objectives[side].map(o => `<li class="${o.hit ? 'hit' : ''}">${o.hit ? '✓' : '✗'} ${o.id}</li>`).join('');
+    const objRows = side => sim.objectives[side].map(o => { const h = Math.min(3, (o.ref && o.ref.hits) || 0); return `<li class="${h ? 'hit' : ''}">${h >= 3 ? '✓' : h ? '◐' : '✗'} ${o.id} ${h}/3</li>`; }).join('');
     const campDone = campaign && current.campaign && campaign.night >= NIGHTS.length;
     $('debrief-body').innerHTML = `
       <div class="h">DEBRIEF · NIGHT ${n.n}: ${sim.endReason || ''}</div>
@@ -227,7 +227,7 @@
       <table class="res">
         <tr><th></th><th class="IN">INDIA</th><th class="PK">PAKISTAN</th></tr>
         ${row('Points', `<b>${s.IN.points}</b>`, `<b>${s.PK.points}</b>`)}
-        ${row('Priority targets hit', s.IN.objHits, s.PK.objHits)}
+        ${row('Priority targets destroyed / damaged', `${s.IN.objDestroyed} / ${s.IN.objDamaged}`, `${s.PK.objDestroyed} / ${s.PK.objDamaged}`)}
         ${row('Other bases / air defences hit', s.IN.otherHits, s.PK.otherHits)}
         ${row('Kills <span class="k">claimed → confirmed</span>', `${s.IN.claimed} → ${s.IN.kills}`, `${s.PK.claimed} → ${s.PK.kills}`)}
         ${row('Aircraft lost in the air', s.IN.lost, s.PK.lost)}
@@ -427,9 +427,16 @@
     if (!o) return 'ORBITING';
     if (o.type === 'orbit') return u.def.role === 'aew' ? 'ON STATION' : sim.isDrone(u) ? 'LOITERING' : 'COMBAT AIR PATROL';
     if (o.type === 'sead') return 'HUNTING RADARS';
-    if (o.type === 'strike' || o.type === 'drone') return o.list.length ? `STRIKE → ${o.list[0].id}` : 'EGRESS';
+    if (u.holding) return '<span class="warm">HOLDING: waiting for escort</span>';
+    if (o.type === 'strike' || o.type === 'drone') return o.list.length ? `${u.firing ? 'FIRING' : 'INBOUND'} → ${o.list[0].id}` : 'EGRESS';
     if (o.type === 'rtb') return `RETURNING TO ${o.base || u.base}`;
     return o.type.toUpperCase();
+  }
+  // Ground targets take 3 hits to destroy.
+  function hitsRow(ref) {
+    const h = Math.min(3, ref.hits || 0);
+    const pips = [0, 1, 2].map(i => `<i class="pip ${i < h ? 'on' : ''}"></i>`).join('');
+    return `<div class="row"><span class="k">Hits</span> ${pips} ${h >= 3 ? '<span class="warn">DESTROYED</span>' : h ? `<span class="warm">DAMAGED (${h}/3)</span>` : 'intact (0/3)'}</div>`;
   }
   const fmtT = s => `${Math.floor(Math.max(0, s) / 60)}:${String(Math.floor(Math.max(0, s) % 60)).padStart(2, '0')}`;
   const objFor = ref => {
@@ -465,7 +472,7 @@
     const own = b.side === ui.side;
     const st = !sim.baseOpen(b) ? `<span class="warn">RUNWAY CLOSED · repairs ~${fmtT((b.damage - 59) / 5 * 60)}</span>`
       : b.damage > 0 ? `<span class="warm">DAMAGED ${Math.round(b.damage)}%</span>` : 'OPERATIONAL';
-    let info = head(`${b.id} AIR BASE`, b.side) + `<div class="row">${st} ${objFor(b)}</div>`;
+    let info = head(`${b.id} AIR BASE`, b.side) + `<div class="row">${st} ${objFor(b)}</div>` + hitsRow(b);
     if (!own) {
       const types = Object.keys(b.pools).map(ty => AIRCRAFT[ty].name).join(', ');
       info += `<div class="note">${types ? 'Intelligence: ' + types + ' based here.' : 'Divert airfield.'} Send a GROUND ATTACK here from one of your bases. Hits close the runway at 60% damage and can destroy aircraft on the ground.</div>`;
@@ -499,40 +506,35 @@
     let info = head(MISSION_TXT[pl.kind][0], ui.side) + `<div class="row">${who}</div>`;
     let btns = '';
     if (pl.kind === 'strike' && pl.target) {
-      const eb = !pl.unit && escortBase(pl.base);
-      info += `<div class="row">Target: <b>${pl.target.id}</b></div><div class="row k">Ground-attack jets carry no air-to-air missiles. An escort protects them.</div>`;
-      btns += `<button data-act="plan-go" class="go">LAUNCH</button>`;
-      const near = sim.units.filter(u => u.side === ui.side && u.state === 'air' && sim.manned(u) && u.def.role === 'fighter' && sim.hasAAM(u) && !(u.mission && u.mission.kind === 'escort'));
-      if (eb) btns += `<button data-act="plan-go-escort" class="go">LAUNCH + ESCORT <small>(2 ${AIRCRAFT[eb.type].name} from ${eb.base})</small></button>`;
-      else if (pl.unit && near.length) btns += `<span class="k">To escort it, select a fighter and choose ESCORT.</span>`;
+      const room = escortRoom();
+      const esc = Math.min(pl.escortN || 0, room);
+      info += `<div class="row">Target: <b>${pl.target.id}</b> · 3 hits destroy it</div>` +
+        `<div class="row k">The striker presses in as close as it can and fires all 3 weapons. Closer shots hit more often and spend less time over enemy air defences. If enemy fighters close in, it fires early from further out.</div>` +
+        `<div class="row">Escort from <b>${pl.base}</b>: ${room ? '' : '<span class="k">no spare fighters here. Send one later from another base with ESCORT; the striker waits for it in safe airspace.</span>'}</div>`;
+      if (room) btns += `<div class="seg2 wide">` + [0, 1, 2].filter(n => n <= room).map(n => `<button data-act="escn" data-n="${n}" class="${esc === n ? 'on' : ''}">${n ? n + ' ESCORT' + (n > 1 ? 'S' : '') : 'NO ESCORT'}</button>`).join('') + `</div>`;
+      btns += `<button data-act="plan-go" class="go">LAUNCH${esc ? ` + ${esc} ESCORT` : ''}</button>`;
     } else {
       info += `<div class="row warm">${{ chase: 'Tap an enemy aircraft (or cruise missile) to chase.', escort: 'Tap one of your ground-attack flights to escort.', strike: 'Tap an enemy target: site, radar, SAM or air base.', attack: 'Tap an enemy target: site, radar, SAM or air base.' }[pl.kind]}</div>`;
     }
     btns += `<button data-act="plan-cancel" class="danger">CANCEL</button>`;
     return { info, btns };
   }
-  // Nearest of our bases with two fighters ready to fly air-to-air.
-  function escortBase(fromId) {
-    const from = sim.base(fromId);
-    let best = null, bd = Infinity;
-    for (const b of sim.bases) {
-      if (b.side !== ui.side || !sim.baseOpen(b)) continue;
-      for (const [ty, p] of Object.entries(b.pools)) {
-        if (AIRCRAFT[ty].role !== 'fighter' || !PRESETS[ty].AIR || p.ready < 2) continue;
-        if (b.id === fromId && ty === ui.plan.type && p.ready < ui.plan.n + 2) continue;
-        const d = dist(b, from);
-        if (d < bd) { bd = d; best = { base: b.id, type: ty }; }
-      }
-    }
-    return best;
+  // Escorts come from the striker's own base: up to 2 fighters left after the strikers.
+  function escortRoom() {
+    const pl = ui.plan;
+    if (pl.unit) return 0;
+    const b = sim.base(pl.base), p = b.pools[pl.type];
+    if (!p || !PRESETS[pl.type].AIR) return 0;
+    return Math.max(0, Math.min(2, p.ready - pl.n));
   }
-  function launchPlan(withEscort) {
+  function launchPlan() {
     const pl = ui.plan;
     const m = { kind: pl.kind, preset: pl.kind === 'strike' ? 'STRIKE' : pl.kind === 'attack' ? null : 'AIR', target: pl.target, prey: pl.prey, escortUnit: pl.escortUnit };
-    const eb = withEscort && !pl.unit ? escortBase(pl.base) : null;
+    const escN = pl.kind === 'strike' ? Math.min(pl.escortN || 0, escortRoom()) : 0;
     const ms = pl.unit ? sim.assignMission(pl.unit, m) : sim.createMission({ ...m, side: ui.side, base: pl.base, type: pl.type, n: pl.n });
+    const eb = escN ? { base: pl.base, type: pl.type } : null;
     if (eb) {
-      const em = { side: ui.side, kind: 'escort', base: eb.base, type: eb.type, n: 2, preset: 'AIR' };
+      const em = { side: ui.side, kind: 'escort', base: eb.base, type: eb.type, n: escN, preset: 'AIR' };
       if (ms.unit && ms.unit.state === 'air') em.escortUnit = ms.unit; else em.escortOf = ms.id;
       sim.createMission(em);
     }
@@ -555,8 +557,7 @@
     const own = ref.side === ui.side;
     if (ref.kind === 'base') return describeBase(ref);
     if (ref.kind === 'site') {
-      let info = head(`TARGET: ${ref.id}`, '', objFor(ref)) +
-        `<div class="row"><span class="k">Weapons on target:</span> ${ref.hits}</div>`;
+      let info = head(`TARGET: ${ref.id}`, '', objFor(ref)) + hitsRow(ref);
       info += ui.side === 'IN'
         ? `<div class="note">Select a strike flight, then tap this site. The flight launches once it is in weapon range.</div>`
         : `<div class="note">Protect this site. Cruise missiles fly low, so they need AEW&amp;C coverage to be seen in time for an intercept.</div>`;
@@ -594,7 +595,7 @@
     const threatRow = near ? `<div class="row warn">⚠ ${threats} missile${threats > 1 ? 's' : ''} inbound · nearest ${near.w.name}, ${dist(near, u).toFixed(0)} km${u.defending ? ` · evading (${u.defMode === 'notch' ? 'notch' : 'break'})` : ''}</div>` : '';
     const fuelPct = Math.round(100 * Math.min(1, u.fuel / def.fuel));
     const info = head(`${u.callsign} · ${def.name}${u.count > 1 ? ' ×' + u.count : ''}`, u.side) +
-      `<div class="row">${status(u)}${u.bingo ? ' · <span class="warn">BINGO</span>' : ''}${u.mission ? ` · <span class="k">mission</span> ${u.mission.name}` : ''}</div>` +
+      `<div class="row">${status(u)}${u.bingo ? ' · <span class="warn">BINGO</span>' : ''}${u.dmg ? ' · <span class="warn">DAMAGED</span>' : ''}${u.mission ? ` · <span class="k">mission</span> ${u.mission.name}` : ''}</div>` +
       (def.role === 'aew' ? '' : wpnRows(u.wpn)) +
       `<div class="row"><span class="k">Fuel</span><span class="bar"><i style="width:${fuelPct}%;${fuelPct < 30 ? 'background:var(--red)' : ''}"></i></span>` +
       ` · <span class="k">Radar</span> ${def.role === 'aew' ? 'ON (AEW&C)' : u.radarOn ? 'ON' : 'silent'}</div>` +
@@ -613,7 +614,7 @@
     if (!tr) return { info: '', btns: '' };
     if (e.kind === 'sam' || e.kind === 'radar') {
       return {
-        info: head(`${e.kind === 'sam' ? 'SAM SITE' : 'RADAR'}: ${e.callsign}`, e.side, objFor(e)) + (e.dead ? '<div class="row">DESTROYED (battle damage assessment)</div>' : '') +
+        info: head(`${e.kind === 'sam' ? 'SAM SITE' : 'RADAR'}: ${e.callsign}`, e.side, objFor(e)) + hitsRow(e) +
           `<div class="note">Known from intelligence and its emissions. ${e.kind === 'sam' ? `Estimated reach ~${Math.round(WEAPONS[e.def.weapon].range * 0.7)} km: stay outside the red ring.` : ''} Strike it with a strike flight or send Harop / drones.</div>`,
         btns: '',
       };
@@ -652,8 +653,8 @@
       renderPanel(true); return;
     }
     if (act === 'plan-cancel') { ui.plan = null; renderPanel(true); return; }
-    if (act === 'plan-go') { launchPlan(false); return; }
-    if (act === 'plan-go-escort') { launchPlan(true); return; }
+    if (act === 'plan-go') { launchPlan(); return; }
+    if (act === 'escn') { ui.plan.escortN = +b.dataset.n; renderPanel(true); return; }
     if (act === 'n-' || act === 'n+') {
       const k = b.dataset.key;
       ui.deployN[k] = Math.max(1, (ui.deployN[k] || 2) + (act === 'n+' ? 1 : -1));
@@ -707,8 +708,12 @@
       const t = planTarget(ui.plan, hit);
       if (!t) { hint({ chase: 'Tap an enemy aircraft', escort: 'Tap one of your ground-attack flights', strike: 'Tap an enemy site, radar, SAM or air base', attack: 'Tap an enemy site, radar, SAM or air base' }[ui.plan.kind]); return; }
       Object.assign(ui.plan, t);
-      if (ui.plan.kind === 'strike' && !ui.plan.unit) { renderPanel(true); return; }   // confirm, with optional escort
-      launchPlan(false);
+      if (ui.plan.kind === 'strike' && !ui.plan.unit) {   // confirm, with an optional escort
+        if (ui.plan.escortN == null) ui.plan.escortN = Math.min(1, escortRoom());
+        renderPanel(true);
+        return;
+      }
+      launchPlan();
       return;
     }
     const s = ui.sel && ui.sel.ref;
@@ -719,7 +724,7 @@
         const can = kind === 'attack' ? sim.isDrone(s) : kind === 'strike' ? !!sim.strikeWeapon(s) : s.def.role === 'fighter' && sim.hasAAM(s);
         if (!can) continue;
         const t = planTarget({ kind, unit: s }, hit);
-        if (t) { ui.plan = { unit: s, kind, ...t }; launchPlan(false); return; }
+        if (t) { ui.plan = { unit: s, kind, ...t }; launchPlan(); return; }
       }
     }
     if (hit) {

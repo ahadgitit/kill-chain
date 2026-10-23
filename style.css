@@ -126,6 +126,8 @@ body.training #ewbar { display: none !important; }
 #panel .deploy button[data-act="n-"], #panel .deploy button[data-act="n+"] { min-width: 34px; padding: 4px; }
 #panel button:disabled { opacity: .35; cursor: not-allowed; }
 
+.pip { display: inline-block; width: 10px; height: 10px; border: 1px solid var(--red); margin-right: 2px; vertical-align: middle; }
+.pip.on { background: var(--red); }
 .mgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; }
 #panel .mbtn { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; padding: 7px 9px; min-height: 44px; }
 #panel .mbtn b { color: var(--hi); letter-spacing: .5px; font-size: 12px; }

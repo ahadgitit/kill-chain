@@ -13,9 +13,9 @@ It works on desktop and mobile (touch), with no install and no build step.
 
 - **Air bases.** Each base hosts one aircraft type, using real names and locations (India: Ambala Rafale, Halwara/Sirsa/Jodhpur Su-30MKI, Adampur/Srinagar MiG-29, Pathankot Mirage 2000, Bathinda Netra, Agra Phalcon, Amritsar Harop; Pakistan: Minhas J-10CE, Rafiqui/Peshawar JF-17, Mushaf/Jacobabad F-16, Nur Khan Erieye, Masroor ZDK-03, Sialkot drones). Other fields are divert bases and targets.
 - **Your job: three missions.** Tap one of your air bases, choose how many aircraft to send, and pick:
-  - **CHASE**: tap an enemy aircraft. The jets launch with air-to-air missiles and hunt it down, or chase it back into its own airspace.
-  - **ESCORT**: tap one of your ground-attack flights. The escort flies ahead of it and fights off interceptors.
-  - **GROUND ATTACK**: tap an enemy site, radar, SAM or air base. The jets carry air-to-surface weapons only, so use **LAUNCH + ESCORT**. Drone bases send one-way drones.
+  - **CHASE**: tap an enemy aircraft. Each fighter carries 4 air-to-air missiles and fires 2 per enemy. An aircraft goes down after 2 hits (1 hit damages it).
+  - **ESCORT**: tap one of your ground-attack flights. The escort flies ahead of it and fights off interceptors. A striker given an escort holds in safe airspace until the escort catches up.
+  - **GROUND ATTACK**: tap an enemy site, radar, SAM or air base, and choose 0, 1 or 2 escorts from the same base. Each striker carries 3 air-to-surface weapons and 2 short-range missiles. A target is destroyed by 3 hits. The striker presses in as close as it can and fires early only if enemy fighters close in. Closer launches hit more often and spend less time over enemy ground defences, so clearing the way with escorts pays off. Drone bases send one-way drones.
 
   You can also select an airborne flight and give it a new mission, or simply tap an enemy with the flight selected.
 - **The AI flies everything else.** It dodges missiles (break or notch), manages radar, returns at bingo fuel, refuels and re-arms. AEW&C aircraft take off and orbit on their own, and ready fighters scramble automatically when enemies come near their base.
@@ -31,8 +31,8 @@ It works on desktop and mobile (touch), with no install and no build step.
 - **Escalation.** Strikes and kills raise a shared meter. At 100% both sides lose. Night 4 ends in a ceasefire.
 - **After-action replay.** Watch the whole night from both sides.
 - **Scoring.**
-  - Every night, both sides have priority targets to attack and assets to defend. 10 points per priority target hit, and 8 per enemy priority target left untouched.
-  - 6 per other base or air defence hit.
+  - Every night, both sides have priority targets to attack and assets to defend. A priority target is worth 10 when destroyed (3 hits), scored per hit; the defender keeps 8 per target for the share left intact.
+  - Up to 6 per other base or air defence (by hits).
   - Kills score the aircraft's value, and ground kills half its value.
   - 3 per strike weapon intercepted, 1 per drone.
 

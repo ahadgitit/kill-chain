@@ -676,7 +676,7 @@
         for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { c.moveTo(p.x + dx * (r - 4), p.y + dy * (r - 4)); c.lineTo(p.x + dx * (r + 5), p.y + dy * (r + 5)); }
         c.stroke();
         c.globalAlpha = 1;
-        if (o.hit) this.label('HIT', p.x, p.y - r - 8, COL.site, 'center', 9);
+        this.hitPips(o.ref, p.x, p.y - r - 9, COL.site);
       }
       for (const o of sim.objectives[KC.util.ENEMY[ui.side]]) {
         if (!o.ref) continue;
@@ -684,7 +684,18 @@
         c.strokeStyle = o.hit ? COL.site : COL.hot; c.globalAlpha = 0.7; c.setLineDash([4, 3]);
         c.beginPath(); c.arc(p.x, p.y, 15, 0, Math.PI * 2); c.stroke();
         c.setLineDash([]); c.globalAlpha = 1;
-        if (this.view.scale > 0.5) this.label(o.hit ? 'HIT' : 'DEFEND', p.x, p.y + 24, o.hit ? COL.site : COL.hot, 'center', 8);
+        if (this.view.scale > 0.5) this.label('DEFEND', p.x, p.y + 24, COL.hot, 'center', 8);
+        if (o.ref.hits) this.hitPips(o.ref, p.x, p.y - 22, COL.hot);
+      }
+    }
+    // Three boxes over a ground target: filled for each hit taken (3 = destroyed).
+    hitPips(ref, x, y, col) {
+      const c = this.ctx, h = Math.min(3, ref.hits || 0);
+      for (let i = 0; i < 3; i++) {
+        const px = x - 10 + i * 7;
+        c.strokeStyle = col; c.lineWidth = 1;
+        c.strokeRect(px, y - 2.5, 5, 5);
+        if (i < h) { c.fillStyle = col; c.fillRect(px, y - 2.5, 5, 5); }
       }
     }
 

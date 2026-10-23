@@ -31,6 +31,7 @@ It works on desktop and mobile (touch), with no install and no build step.
 - **Fog of war.** Kills are only *claimed* during the night. The debrief shows claimed against confirmed.
 - **Escalation.** Strikes and kills raise a shared meter. At 100% both sides lose. Night 4 ends in a ceasefire.
 - **After-action replay.** Watch the whole night from both sides.
+- **Sound.** All synthesised in the browser (no audio files): a radar-room hum with a sweep ping, missile launch whoosh, warning tones (launch warning, missile active), lock tone, air and ground explosions, jet take-off roar and a striker alarm. 🔊 in the top bar or on the menu mutes it.
 - **Scoring.**
   - Every night, both sides have priority targets to attack and assets to defend. A priority target is worth 10 when destroyed (3 hits), scored per hit; the defender keeps 8 per target for the share left intact.
   - Up to 6 per other base or air defence (by hits).
@@ -74,6 +75,7 @@ js/data.js     aircraft, weapons, SAMs, scenario
 js/sim.js      simulation core: bases, sorties, sensors, link, missiles, strikes, drones, EW, escalation, replay
 js/ai.js       side-level AI commander (CAPs, strikes, drones, EW)
 js/render.js   canvas renderer
+js/audio.js    synthesised sound effects and ambience (Web Audio API)
 js/ui.js       input, HUD, menus, attract mode, game loop
 js/training.js missile-evasion training mission
 tools/build_map.py  rebuild js/mapdata.js from the world-atlas + sane-topojson npm packages

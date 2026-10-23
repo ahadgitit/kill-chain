@@ -292,6 +292,7 @@
       if (e.n <= evSeen) continue;
       evSeen = e.n;
       if (e.side !== ui.side && e.side !== 'ALL') continue;
+      soundFor(e);
       const html = `<span class="ev-t">${sim.clock(e.t).slice(0, 4)}</span>${escapeHtml(e.text)}`;
       const d = document.createElement('div');
       d.className = 'ev-' + e.cls;
@@ -306,6 +307,33 @@
     }
     while (lg.children.length > 300) lg.lastChild.remove();
   }
+  // Sounds for what our side hears about: launches, warnings, locks, hits, take-offs, alarms.
+  function soundFor(e) {
+    const A = KC.Audio, t = e.text;
+    if (/STRIKER (INBOUND|CLOSING)/.test(t)) A.play('alarm');
+    else if (/LAUNCH WARNING/.test(t)) A.play('rwr');
+    else if (/MISSILE WARNING|MISSILE ACTIVE/.test(t)) A.play('active');
+    else if (/airborne from|scrambles/.test(t)) A.play('takeoff', 0.8);
+    else if (/PITBULL/.test(t)) A.play('lock');
+    else if (e.cls === 'impact') A.play('impact', e.side === 'ALL' ? 0.9 : 1);
+    else if (/ LOST,/.test(t)) A.play('loss');
+    else if (e.cls === 'kill' || /DAMAGED|DESTROYED/.test(t)) A.play('hit', 0.8);
+    else if (e.cls === 'shot' && /FOX|BIRD AWAY|launched/.test(t)) A.play('launch', /BIRD AWAY/.test(t) ? 0.7 : 1);
+  }
+  // Browsers only allow sound after the first tap or key press.
+  const unlockAudio = () => KC.Audio.unlock();
+  window.addEventListener('pointerdown', unlockAudio);
+  window.addEventListener('keydown', unlockAudio);
+  function syncSound() {
+    for (const id of ['btn-sound', 'menu-sound']) {
+      const b = $(id);
+      if (!b) continue;
+      b.textContent = KC.Audio.muted ? (id === 'menu-sound' ? '🔇 SOUND OFF' : '🔇') : (id === 'menu-sound' ? '🔊 SOUND ON' : '🔊');
+      b.classList.toggle('on', !KC.Audio.muted);
+    }
+  }
+  for (const id of ['btn-sound', 'menu-sound']) $(id).onclick = () => { KC.Audio.unlock(); KC.Audio.setMuted(!KC.Audio.muted); syncSound(); };
+  syncSound();
   const escapeHtml = s => s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 
   function updateTop() {
@@ -640,6 +668,7 @@
   $('panel').addEventListener('click', ev => {
     const b = ev.target.closest('[data-act]');
     if (!b || !sim) return;
+    KC.Audio.play('click');
     const ref = ui.sel && ui.sel.ref;
     const act = b.dataset.act;
     if (act === 'close') { ui.plan = null; select(null); return; }

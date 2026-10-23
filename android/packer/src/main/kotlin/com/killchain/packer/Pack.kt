@@ -153,5 +153,12 @@ fun main(argv: Array<String>) {
         .setV1SigningEnabled(false).setV2SigningEnabled(true)   // v2 covers every device from minSdk 24 up
         .build().sign()
     a["store"]?.let { Icon.storeArt(File(it)) }
+    // The same icon as source resources for the Android Gradle Plugin build.
+    a["resOut"]?.let { dir ->
+        for ((n, d) in files) if (n.endsWith(".png")) File(dir, n.removePrefix("res/").replace("-v4/", "/")).apply { parentFile.mkdirs(); writeBytes(d) }
+        File(dir, "mipmap-anydpi-v26/ic_launcher.xml").apply { parentFile.mkdirs() }.writeText(
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<adaptive-icon xmlns:android=\"http://schemas.android.com/apk/res/android\">\n" +
+                "    <background android:drawable=\"@drawable/ic_launcher_background\" />\n    <foreground android:drawable=\"@drawable/ic_launcher_foreground\" />\n</adaptive-icon>\n")
+    }
     println("APK: ${out.path} (${out.length() / 1024} KB)")
 }

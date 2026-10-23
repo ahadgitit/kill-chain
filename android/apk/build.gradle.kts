@@ -39,9 +39,25 @@ tasks.named<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>("compileTestKotlin"
     compilerOptions { jvmTarget.set(JvmTarget.JVM_17); freeCompilerArgs.set(listOf()) }
 }
 tasks.named<JavaCompile>("compileTestJava") { sourceCompatibility = "17"; targetCompatibility = "17" }
+// What the Android Gradle Plugin would hand Robolectric: where the manifest and assets are.
+val robolectricConfig by tasks.registering {
+    val out = layout.buildDirectory.dir("robolectric-config")
+    outputs.dir(out)
+    doLast {
+        val f = out.get().file("com/android/tools/test_config.properties").asFile
+        f.parentFile.mkdirs()
+        f.writeText("android_merged_manifest=${file("src/test/robolectric/AndroidManifest.xml").path}\n" +
+            "android_merged_assets=${file("../app/src/main/assets").path}\n" +
+            "android_resource_apk=${layout.buildDirectory.file("pack/unsigned.apk").get().asFile.path}\n" +
+            "android_custom_package=com.killchain.game\n")
+    }
+}
+sourceSets { test { resources.srcDir(robolectricConfig) } }
 tasks.test {
-    dependsOn(robolectricDeps)
+    dependsOn(robolectricDeps, "assembleApk")
     systemProperty("robolectric.offline", "true")
+    // The game core is plain Kotlin: running it uninstrumented keeps the simulation fast.
+    systemProperty("robolectric.classesToNotInstrumentRegex", "com\\.killchain\\.core\\..*")
     systemProperty("robolectric.dependency.dir", layout.buildDirectory.dir("robolectric-deps").get().asFile.path)
     systemProperty("robolectric.graphicsMode", "NATIVE")
     systemProperty("kc.shots", layout.buildDirectory.dir("shots").get().asFile.path)
@@ -80,6 +96,7 @@ tasks.register<JavaExec>("assembleApk") {
             "out=${layout.buildDirectory.file("outputs/KillChain.apk").get().asFile.path}",
             "work=${layout.buildDirectory.dir("pack").get().asFile.path}",
             "store=${layout.buildDirectory.dir("outputs/store").get().asFile.path}",
+            "resOut=${file("../app/src/main/res").path}",
             "package=com.killchain.game", "activity=com.killchain.app.MainActivity", "label=Kill Chain",
             "versionCode=$versionCode", "versionName=$versionName", "minSdk=26", "targetSdk=35",
             "keystore=$keystore", "storepass=$storePass", "alias=killchain",

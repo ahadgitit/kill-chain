@@ -101,6 +101,28 @@ tools/build_map.py  rebuild js/mapdata.js from the world-atlas + sane-topojson n
 tools/headless.js   run nights AI-vs-AI headless: node tools/headless.js <runs> <night>
 ```
 
+## Android app
+
+`android/` is a native Android version of the game (no web view): the simulation and AI are ported
+to Kotlin (`android/core`, checked event for event against the JS version with
+`tools/dump_events.js`), and the map, HUD, panels, menus, training, replay and sounds are drawn
+with the Android framework (`android/app`). It adds a first-run guide, a pause menu and an about
+screen, and plays in landscape.
+
+- `android/core`: game core, plain Kotlin. `gradle :core:installDist`, then
+  `core/build/install/core/bin/core events 1 1` prints a night's events (compare with
+  `node tools/dump_events.js 1 1`).
+- `android/app`: app sources, plus a standard Android Gradle Plugin build (`app/build.gradle.kts`).
+  With Android Studio or the SDK installed, `./gradlew :app:bundleRelease` makes a Play Store bundle.
+- `android/apk`: builds the same app **without the Android SDK**: it compiles against the Android
+  framework jar on Maven Central, runs the app under Robolectric (`gradle :apk:test` saves
+  screenshots of every screen to `apk/build/shots`), and packs a signed APK with dx, a hand-written
+  binary manifest and resource table (`android/packer`) and apksig:
+  `gradle :apk:assembleApk` → `apk/build/outputs/KillChain.apk`, plus Play Store icon and feature
+  graphic in `apk/build/outputs/store`.
+- Signing: `android/release.keystore` (created on first build, never committed; default password
+  `killchain`, override with `-Pkc.storepass=...`). Keep it: updates must be signed with the same key.
+
 ## Map data
 
 Coastlines, country borders, rivers and lakes come from [Natural Earth](https://www.naturalearthdata.com/) (public domain), via the `world-atlas` and `sane-topojson` npm packages. Borders are Natural Earth's de facto lines, and Kashmir is shown divided by the Line of Control. The map uses a stereographic projection centred on 30°N 73°E, so shapes stay true and in-game kilometres stay within ~2.5% of real distances across the theatre.

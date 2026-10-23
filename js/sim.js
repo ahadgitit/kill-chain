@@ -365,6 +365,28 @@
         }
       }
       this.checkBaseThreats();
+      this.strikerWarnings();
+    }
+    // Early warning: flag enemy strike jets when first detected and again when close.
+    strikerWarnings() {
+      for (const side of SIDES) {
+        for (const tr of this.tracks[side].values()) {
+          const e = tr.ref;
+          if (e.kind !== 'air' || e.ghost || !this.isAlive(e) || !e.order || e.order.type !== 'strike' || !e.order.list.length) continue;
+          const job = e.order.list[0];
+          const tgt = this.refFor(job.kind, job.id);
+          if (!tgt) continue;
+          const d = dist(e, tgt);
+          tr.striker = this.targetId(tgt);
+          if (!tr.warnStage) {
+            tr.warnStage = 1;
+            this.log(side, `⚠ STRIKER INBOUND: T${tr.num} ${e.def.name}${e.count > 1 ? ' ×' + e.count : ''} heading for ${tr.striker}, ${d.toFixed(0)} km out. Send a CHASE.`, 'loss', { striker: e });
+          } else if (tr.warnStage === 1 && d < 100) {
+            tr.warnStage = 2;
+            this.log(side, `⚠ STRIKER CLOSING: T${tr.num} is ${d.toFixed(0)} km from ${tr.striker}`, 'loss', { striker: e });
+          }
+        }
+      }
     }
     updateTrack(side, e, q) {
       const table = this.tracks[side];
@@ -752,7 +774,10 @@
         u.holdPt = null;
       }
       // Press in as close as possible; fire early only if threatened.
-      const threatened = u.threats.length > 0 || this.enemyFightersNear(u, 55);
+      // An escort flying with the striker keeps it pressing in; a missile at it never does.
+      const escorted = this.units.some(e => e.side === u.side && e.state === 'air' && e.mission && e.mission.kind === 'escort' && e.mission.status !== 'done' &&
+        (e.mission.escortUnit === u || (u.mission && e.mission.escortOf === u.mission.id)) && this.hasAAM(e) && dist(e, u) < 40);
+      const threatened = u.threats.length > 0 || (!escorted && this.enemyFightersNear(u, 55));
       if (u.firing || d <= Math.min(maxR, 25) || (threatened && d <= maxR)) {
         if (!u.firing) {
           u.firing = true;
@@ -768,7 +793,7 @@
         return { hdg: bearing(u, ref), spd: def.speed };
       }
       // AI strike packages give up if they can't reach a launch point in time.
-      if (u.ai && this.t - (u.strikeSince || 0) > 1500) { this.log(u.side, `${u.callsign} strike aborted`, 'info'); this.orderRTB(u); }
+      if (u.ai && this.t - (u.strikeSince || 0) > 2700) { this.log(u.side, `${u.callsign} strike aborted`, 'info'); this.orderRTB(u); }
       return { hdg: this.leash(u, bearing(u, ref)), spd: def.speed };
     }
     // Waiting for an escort: orbit inside our own airspace, well back from the border.

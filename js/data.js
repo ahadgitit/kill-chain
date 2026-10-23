@@ -47,7 +47,8 @@
   //   Useful launch range is much shorter, especially against a target that turns away.
   // vMax km/s, burn s, seeker: active seeker range km, tp: can be guided by
   // third-party data-link tracks (e.g. from an AEW&C), not just the shooter.
-  // Cruise weapons: dmg = damage to a base per hit (runway closes at 60).
+  // Cruise weapons: dmg = damage to a base per hit (runway closes at 60). Stand-off ranges are
+  // deliberately about half the real figures so strike jets must come within reach of defenders.
   const WEAPONS = {
     PL15: { name: 'PL-15E', kind: 'aam', range: 150, vMax: 1.5, burn: 12, seeker: 25, pk: 0.6, tp: true },
     METEOR: { name: 'Meteor', kind: 'aam', range: 170, vMax: 1.2, burn: 70, seeker: 20, pk: 0.7, tp: false },
@@ -65,12 +66,12 @@
     MRSAM: { name: 'MRSAM', kind: 'sam', range: 90, vMax: 1.1, burn: 8, seeker: 15, pk: 0.55, tp: true },
     AKASH: { name: 'Akash', kind: 'sam', range: 30, vMax: 0.85, burn: 5, seeker: 10, pk: 0.5, tp: true },
     LY80: { name: 'LY-80', kind: 'sam', range: 50, vMax: 1.0, burn: 6, seeker: 10, pk: 0.5, tp: true },
-    SCALP: { name: 'SCALP-EG', kind: 'cruise', range: 280, speed: 0.27, rcs: 0.1, low: true, dmg: 35 },
-    BRAHMOS: { name: 'BrahMos-A', kind: 'cruise', range: 400, speed: 0.85, rcs: 0.3, low: false, dmg: 45 },
+    SCALP: { name: 'SCALP-EG', kind: 'cruise', range: 140, speed: 0.27, rcs: 0.1, low: true, dmg: 35 },
+    BRAHMOS: { name: 'BrahMos-A', kind: 'cruise', range: 200, speed: 0.85, rcs: 0.3, low: false, dmg: 45 },
     HAMMER: { name: 'HAMMER', kind: 'cruise', range: 70, speed: 0.3, rcs: 0.1, low: false, dmg: 20 },
     SPICE: { name: 'SPICE-2000', kind: 'cruise', range: 60, speed: 0.22, rcs: 0.2, low: false, dmg: 30 },
-    CM400: { name: 'CM-400AKG', kind: 'cruise', range: 240, speed: 1.0, rcs: 0.3, low: false, dmg: 40 },
-    H4: { name: 'H-4 SOW', kind: 'cruise', range: 120, speed: 0.22, rcs: 0.15, low: false, dmg: 30 },
+    CM400: { name: 'CM-400AKG', kind: 'cruise', range: 120, speed: 1.0, rcs: 0.3, low: false, dmg: 40 },
+    H4: { name: 'H-4 SOW', kind: 'cruise', range: 60, speed: 0.22, rcs: 0.15, low: false, dmg: 30 },
     LS6: { name: 'LS-6 glide bomb', kind: 'cruise', range: 60, speed: 0.2, rcs: 0.15, low: false, dmg: 20 },
   };
   const V_MIN = 0.35;

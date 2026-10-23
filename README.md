@@ -18,6 +18,7 @@ It works on desktop and mobile (touch), with no install and no build step.
   - **GROUND ATTACK**: tap an enemy site, radar, SAM or air base, and choose 0, 1 or 2 escorts from the same base. Each striker carries 3 air-to-surface weapons and 2 short-range missiles. A target is destroyed by 3 hits. The striker presses in as close as it can and fires early only if enemy fighters close in. Closer launches hit more often and spend less time over enemy ground defences, so clearing the way with escorts pays off. Drone bases send one-way drones.
 
   You can also select an airborne flight and give it a new mission, or simply tap an enemy with the flight selected.
+- **Early warning.** Enemy strike jets are flagged as soon as they're detected (⚠ STRIKER INBOUND, a pulsing ring and a line to the likely target) and again when they're within 100 km of it. Stand-off weapon ranges are about half the real figures (SCALP 140 km, BrahMos 200 km, CM-400 120 km, H-4 60 km), so strike jets must come within reach of defenders.
 - **The AI flies everything else.** It dodges missiles (break or notch), manages radar, returns at bingo fuel, refuels and re-arms. AEW&C aircraft take off and orbit on their own, and ready fighters scramble automatically when enemies come near their base.
 - **Limits.**
   - **Weapons:** the decisive ones (Meteor, SCALP-EG, BrahMos-A, PL-15E, CM-400AKG) come from limited national stocks.

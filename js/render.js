@@ -631,6 +631,23 @@
       }
     }
 
+    // Early-warning marker on an enemy strike jet: pulsing red ring, label and a line to its target.
+    strikerMark(sim, tr, p) {
+      const c = this.ctx;
+      const job = tr.ref.order && tr.ref.order.list && tr.ref.order.list[0];
+      const tgt = job && sim.refFor(job.kind, job.id);
+      const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 180);
+      c.strokeStyle = COL.site; c.lineWidth = 1.5; c.globalAlpha = 0.5 + 0.5 * pulse;
+      c.beginPath(); c.arc(p.x, p.y, 14 + pulse * 4, 0, Math.PI * 2); c.stroke();
+      c.globalAlpha = 1;
+      if (tgt) {
+        const q = this.toScreen(tgt.x, tgt.y);
+        c.setLineDash([6, 5]); c.lineDashOffset = -performance.now() / 40; c.globalAlpha = 0.7;
+        c.beginPath(); c.moveTo(p.x, p.y); c.lineTo(q.x, q.y); c.stroke();
+        c.setLineDash([]); c.lineDashOffset = 0; c.globalAlpha = 1;
+      }
+      this.label(`STRIKER → ${tr.striker}`, p.x + 11, p.y + 7, COL.site, 'left', 10);
+    }
     wreck(p, name) {
       const c = this.ctx;
       c.strokeStyle = COL.dim; c.lineWidth = 1.5;
@@ -722,6 +739,7 @@
           const n = tr.count || e.count;
           const name = esm ? `${e.def.name}?` : `${e.def.name}${n > 1 ? ' ×' + n : ''}`;
           if (this.view.scale > 0.3 || sel) this.label(`T${tr.num} ${name}`, p.x + 11, p.y - 5, col, 'left', 10);
+          if (tr.striker && !stale) this.strikerMark(sim, tr, p);
         } else if (this.view.scale > 0.9 || sel) this.label(e.callsign, p.x + 9, p.y, COL.dim, 'left', 9);
         c.globalAlpha = 1;
       }

@@ -678,6 +678,8 @@
         else this.glyph(u.kind, u.def.role, p.x, p.y, u.hdg, col, { dashed: !u.radarOn });
         const lx = p.x + 11;
         if (u.kind === 'air' && u.defending) this.label(u.defMode === 'notch' ? 'NOTCH' : 'DRAG', p.x - 11, p.y + 14, COL.site, 'right', 9);
+        else if (u.kind === 'air' && u.exposed && !tucked) this.label('EXPOSED', p.x - 11, p.y + 14, COL.site, 'right', 9);
+        else if (u.kind === 'air' && u.low && !tucked) this.label('▼LOW', p.x - 11, p.y + 14, col, 'right', 9);
         if (sel) {
           c.strokeStyle = COL.white; c.lineWidth = 1;
           const r = 12 + half + Math.sin(performance.now() / 250) * 1.5;
@@ -820,6 +822,7 @@
           const name = esm ? `${e.def.name}?` : `${e.def.name}${n > 1 ? ' ×' + n : ''}`;
           if ((this.view.scale > 0.3 && !tucked) || sel) this.label(`T${tr.num} ${name}`, p.x + 11, p.y - 5, col, 'left', 10);
           if (tr.striker && !stale && !tucked) this.strikerMark(sim, tr, p);
+          if (e.low && !esm && !tucked) this.label('▼LOW', p.x - 11, p.y + 14, col, 'right', 9);
         } else if (this.view.scale > 0.9 || sel) this.label(e.callsign, p.x + 9, p.y, COL.dim, 'left', 9);
         c.globalAlpha = 1;
       }

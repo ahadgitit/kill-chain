@@ -331,7 +331,7 @@
             if (u) {
               u.offensive = true;
               this.sweeps.push({ unit: u, until: t + 900 });
-              this.tell(`enemy fighter sweep (${u.count} ${u.def.name}) heading for ${this.placeNear(at)}. A strike usually follows.`, 'sweep');
+              this.tell(`enemy fighter sweep (${1 + (u.wing || []).length} ${u.def.name}) heading for ${this.placeNear(at)}. A strike usually follows.`, 'sweep');
             }
           }
           pk.stage = 'sweep';
@@ -346,8 +346,15 @@
           if (!u) continue;
           pk.stage = 'inbound';
           pk.unit = u;
-          const eb = this.fighterBaseNear(b);
-          if (eb) sim.createMission({ side: this.side, kind: 'escort', base: eb.base, type: eb.type, n: Math.min(pk.escN, eb.ready), preset: 'AIR', escortUnit: u });
+          // Either a low-level run under the radar while the sweep draws the defence's eyes
+          // (no escort: it would give the strikers away), or a high run with an escort.
+          if (sim.rand() < (this.phase >= 2 ? 0.7 : 0.45)) {
+            this.goLow(u);
+            this.tell('enemy strike jets may be coming in at low level, under your radar. Only your fighters will see them.', 'low');
+          } else {
+            const eb = this.fighterBaseNear(b);
+            if (eb) sim.createMission({ side: this.side, kind: 'escort', base: eb.base, type: eb.type, n: Math.min(pk.escN, eb.ready), preset: 'AIR', escortUnit: u });
+          }
         }
       }
     }
@@ -378,10 +385,16 @@
         const ms = sim.createMission({ side: this.side, kind: 'chase', base: best.base, type: best.type, n: 2, preset: 'AIR', prey: e });
         if (ms.unit) {
           ms.unit.offensive = true;
+          this.goLow(ms.unit);
           this.tell(`enemy fighters are pushing toward your ${e.def.name}. Cover it or pull it back.`);
         }
         return;
       }
+    }
+
+    // Terrain hugging, radar off, for a flight (lead and wingmen).
+    goLow(u) {
+      for (const x of [u, ...(u.wing || [])]) { x.radarMode = 'low'; x.low = true; x.radarOn = false; }
     }
 
     // Called by the sim when enemy weapons are heading for one of our bases.

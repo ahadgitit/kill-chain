@@ -19,6 +19,11 @@ It works on desktop and mobile (touch), with no install and no build step.
 
   You can also select an airborne flight and give it a new mission, or simply tap an enemy with the flight selected.
 - **Early warning.** Enemy strike jets are flagged as soon as they're detected (⚠ STRIKER INBOUND, a pulsing ring and a line to the likely target) and again when they're within 100 km of it. Stand-off weapon ranges are about half the real figures (SCALP 140 km, BrahMos 200 km, CM-400 120 km, H-4 60 km), so strike jets must come within reach of defenders.
+- **Radar on, off, or low level.** Select a fighter to set its radar mode: AUTO (the AI decides), RADAR ON, RADAR OFF, or LOW LEVEL. Setting it on a formation lead applies it to the wingmen flying with it.
+  - **Radar off:** enemy radars can still see the jet but can't lock it. Radar-guided missiles (BVR missiles and SAMs) can't be fired at it, only heat-seekers inside their ~20 km range. But a jet must switch its radar on to fire anything, bombs included, and then it can be locked. With radar off it only fires at its own mission target.
+  - **Low level (terrain hugging):** radar off and flying low. Invisible to AEW&C, ground radars and SAMs. Enemy fighters see it only looking down at 60% of their radar range, and any fighter sees anything within 15 km. 15% slower and 60% more fuel. Firing switches the radar on and ends the low-level run.
+  - **Exposed:** switching the radar on inside enemy airspace exposes the jet. Its radar stays on and it can't go silent or low again until it lands.
+  - **The AI does this too:** it sends many of its strike jets in low, without an escort, behind a fighter sweep that draws your attention, and it raids AEW&C aircraft at low level.
 - **The enemy commander.** The opposing side is run by a commander with a doctrine, not a timetable:
   - **Fighter control:** every intruder in its airspace, and every strike jet heading for it, gets a response with the numbers in its favour (two of its fighters per intruding jet, strikers first), from patrols nearby or scrambled from the nearest base.
   - **Strike packages:** a fighter sweep goes in first to clear the corridor, then the strike jets follow with escorts.
@@ -57,7 +62,7 @@ It works on desktop and mobile (touch), with no install and no build step.
 | Concept | In the game |
 |---|---|
 | **Detection** | Radar range scales with target radar cross-section (RCS^¼). Fighter radars look ±60°. AEW&C and ground radars look all around. Low-flying cruise missiles are hard for ground radars to see. |
-| **Data link** | Linked units share tracks. A linked fighter can fire with its radar **off**, using an AEW&C or ground-radar track. The F-16 is not on the national Link-17 net in this sim, so it must use its own radar. |
+| **Data link** | Linked units share tracks, so a radar-silent fighter still sees what the AEW&C sees. It switches its radar on only at the moment it fires, and with a data-link track the target gets no launch warning. The F-16 is not on the national Link-17 net in this sim, so it must use its own radar. |
 | **Warnings** | A shooter emitting a radar lock trips the target's RWR at launch. A silent, data-link-cued shot is only detected when the missile's own seeker goes active. |
 | **Missile kinematics** | Boost, then drag. A missile slows as it flies, so turning away (dragging) can defeat long shots. Effective range depends on aspect. |
 | **Mid-course guidance** | PL-15E can be updated by third-party link tracks. Meteor, AIM-120, R-77 and MICA need the shooter's own radar until the seeker goes active, so the shooter has to "crank" to keep supporting the missile. |

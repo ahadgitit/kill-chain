@@ -13,6 +13,11 @@
   // Formation slots [right, back] in units of FORM_KM: lead, wingman, element lead, its wingman, ...
   const FORMATION = [[0, 0], [-1, 1], [1.2, 0.6], [2.2, 1.6], [-2, 2], [3.2, 2.6], [-3, 3], [4.2, 3.6]];
   const FORM_KM = 1.5;
+  // Emission control and low flying.
+  const VIS_KM = 15;             // any fighter sees aircraft this close, radar or not
+  const LOW_SPEED = 0.85;        // terrain hugging: slower ...
+  const LOW_FUEL = 1.6;          // ... and thirstier
+  const LOW_LOOKDOWN = 0.6;      // fighter radars see a low flyer at this fraction of their range
   const EW = {
     jam: { dur: 75, cd: 360, name: 'LINK JAM' },
     barrage: { dur: 60, cd: 240, r: 120, name: 'BARRAGE JAM' },
@@ -199,6 +204,46 @@
     }
     isDrone(e) { return e.kind === 'air' && e.def.role === 'drone'; }
     manned(e) { return e.kind === 'air' && !e.ghost && e.def.role !== 'drone'; }
+    // A fighter with its radar off can be seen but not locked: radar-guided missiles
+    // (BVR missiles and SAMs) can't be fired at it, only heat-seekers inside their range.
+    isSilent(t) { return t.kind === 'air' && t.def.role === 'fighter' && !t.ghost && !t.radarOn; }
+    // Switch a fighter's radar. Turning it on inside enemy airspace exposes the jet: its
+    // radar stays on and it can't go low again until it lands. It also ends terrain hugging.
+    setRadar(u, on) {
+      if (u.def.role !== 'fighter' || on === u.radarOn) return;
+      if (!on && u.exposed) return;
+      u.radarOn = on;
+      if (!on) return;
+      if (u.low) {
+        u.low = false;
+        if (u.radarMode === 'low') u.radarMode = 'auto';
+        if (u.side === this.player) this.log(u.side, `${u.callsign} radar ON: climbing out of terrain hugging`, 'warn');
+      }
+      if (!u.exposed && geo.sideOf(u.x, u.y) !== u.side) {
+        u.exposed = true;
+        if (u.side === this.player) this.log(u.side, `${u.callsign} radar ON inside enemy airspace: position EXPOSED until it lands`, 'warn');
+      }
+    }
+    // Radar state for a fighter each step, from its mode: auto (the AI decides), on, off, or low (terrain hugging).
+    radarLogic(u) {
+      if (u.def.role !== 'fighter') return;
+      if (u.exposed) { u.radarOn = true; u.low = false; return; }
+      const mode = u.radarMode || 'auto';
+      const guiding = this.missiles.some(m => m.shooter === u && !m.lock && !m.w.tp && m.kind !== 'cruise' && m.kind !== 'srm');
+      const firing = this.t - u.lastShot < 6 || this.t - u.lastLaunch < 6;
+      let want;
+      if (mode === 'on') want = true;
+      else if (mode === 'off' || mode === 'low') want = guiding || firing;
+      else {
+        const aew = this.hasAEW(u.side) && this.ew[ENEMY[u.side]].jam.until <= this.t;
+        const tgt = u.engage || (u.order && u.order.type === 'attack' ? u.order.target : null);
+        const near = tgt && this.isAlive(tgt) && dist(u, tgt) < u.def.radar;
+        if (u.def.linked) want = !aew || guiding || firing || (near && (!this.fireQuality(u, tgt) || !this.tpOnly(u)));
+        else want = !!tgt || firing || this.nearestEnemy(u, 150) != null;
+      }
+      u.low = mode === 'low' && !want;
+      this.setRadar(u, want);
+    }
     airborne(side) {
       let n = 0;
       for (const u of this.units) if (u.side === side && u.state === 'air' && this.manned(u)) n += u.count;
@@ -208,6 +253,11 @@
     detects(s, t) {
       let R0 = this.sensorRange(s);
       if (!R0) return false;
+      // Terrain hugging: hidden from AEW&C and ground radars; fighters see it only looking down, closer in.
+      if (t.kind === 'air' && t.low) {
+        if (s.kind !== 'air' || s.def.role !== 'fighter') return false;
+        R0 *= LOW_LOOKDOWN;
+      }
       const rcs = t.kind === 'air' ? t.def.rcs : t.w.rcs;
       const low = t.kind === 'cruise' ? t.w.low : !!t.def.low;
       let f = Math.pow(rcs / 5, 0.25);
@@ -287,10 +337,12 @@
       const d = dist(u, t);
       const pool = u.kind === 'sam' ? (u.ammo > 0 ? { [u.def.weapon]: u.ammo } : {}) : u.wpn;
       let best = null, bestRange = Infinity;
+      const silent = this.isSilent(t);
       for (const k in pool) {
         if (!pool[k]) continue;
         const w = WEAPONS[k];
         if (w.kind === 'cruise') continue;
+        if (silent && w.kind !== 'srm') continue;   // no radar lock on a silent jet
         if (w.kind === 'srm' && d > w.range * 0.9) continue;
         const R = this.maxRange(w, u, t) * factor;
         if (R >= d && w.range < bestRange) { best = k; bestRange = w.range; }
@@ -348,6 +400,13 @@
           let net = false;
           for (const s of sensors) {
             if (this.detects(s, t)) { by.push(s.id); if (this.isLinked(s) && !jammed) net = true; }
+          }
+          // Eyeballs: any fighter sees an aircraft close by, radar on or off.
+          if (t.kind === 'air') {
+            for (const f of this.units) {
+              if (f.side !== side || f.kind !== 'air' || f.state !== 'air' || f.ghost || f.def.role !== 'fighter' || by.includes(f.id)) continue;
+              if (dist(f, t) < VIS_KM) { by.push(f.id); if (this.isLinked(f) && !jammed) net = true; }
+            }
           }
           t.seen[side] = { any: by.length > 0, net, by };
           if (by.length) this.updateTrack(side, t, 'radar');
@@ -614,6 +673,7 @@
     }
     land(u, b) {
       u.state = 'landed';
+      u.exposed = false; u.low = false; u.radarMode = 'auto';
       this.regroup(u);
       u.threats = []; u.defending = false;
       const p = b.pools[u.type] || (b.pools[u.type] = { ready: 0, rearm: [] });
@@ -702,7 +762,7 @@
       u.defMode = u.manualDef ? u.manualDef.mode : u.defending ? this.autoDefMode(u, near) : null;
 
       // Fuel.
-      u.fuel -= dt * (u.spd > def.speed * 1.1 ? 2.5 : 1);
+      u.fuel -= dt * (u.spd > def.speed * 1.1 ? 2.5 : 1) * (u.low ? LOW_FUEL : 1);
       if (!u.bingo && u.order && u.order.type !== 'rtb') {
         const b = this.nearestOpenBase(u.side, u, u.type) || this.base(u.base);
         if (u.fuel < dist(u, b) / def.speed + 600) {
@@ -724,11 +784,7 @@
       }
 
       if (u.ai) this.aiThink(u);
-      else if (u.order && u.order.type === 'attack' && !this.fireQuality(u, u.order.target) && !u.radarOn &&
-               this.isAlive(u.order.target) && dist(u, u.order.target) < def.radar) {
-        u.radarOn = true;
-        this.log(u.side, `${u.callsign} radar ON: no data-link track, using own radar for a firing solution`, 'info');
-      }
+      this.radarLogic(u);
 
       let want = u.hdg, spd = def.speed;
       if (u.defending) {
@@ -752,6 +808,7 @@
       }
       if (u.defending) u.inForm = false;
       if (u.state !== 'air') return; // landed during steer
+      if (u.low) spd *= LOW_SPEED;
       this.move(u, want, spd, dt, u.defending ? 1.3 : 1);
       if (u.salvo) this.fireSalvo(u);
       if (!u.defending && u.roe === 'free' && def.role === 'fighter') this.autoEngage(u);
@@ -870,7 +927,8 @@
       // An escort flying with the striker keeps it pressing in; a missile at it never does.
       const escorted = this.units.some(e => e.side === u.side && e.state === 'air' && e.mission && e.mission.kind === 'escort' && e.mission.status !== 'done' &&
         (e.mission.escortUnit === u || (u.lead && e.mission.escortUnit === u.lead) || (u.mission && e.mission.escortOf === u.mission.id)) && this.hasAAM(e) && dist(e, u) < 40);
-      const threatened = u.threats.length > 0 || (!escorted && this.enemyFightersNear(u, 55));
+      // Down low the striker is hidden: only a fighter close enough to spot it counts as a threat.
+      const threatened = u.threats.length > 0 || (!escorted && this.enemyFightersNear(u, u.low ? VIS_KM + 10 : 55));
       if (u.firing || d <= Math.min(maxR, 25) || (threatened && d <= maxR)) {
         if (!u.firing) {
           u.firing = true;
@@ -1012,6 +1070,8 @@
     // ---------- shooting ----------
     autoEngage(u) {
       if (this.t - u.lastShot < 3) return;
+      // Radar off / terrain hugging: hold fire except on the jet's own mission target.
+      if ((u.radarMode === 'off' || u.radarMode === 'low') && !u.exposed) return;
       const enemies = this.targetsOf(ENEMY[u.side]);
       let best = null, bestScore = -1;
       for (const t of enemies) {
@@ -1038,7 +1098,10 @@
       const want = this.manned(t) ? 2 : 1;
       if (this.inFlightAt(u.side, t) >= want) return false;
       const k = this.chooseWeapon(u, t, factor);
-      if (!k || !this.canGuide(u, t, k)) return false;
+      if (!k) return false;
+      // Firing means radar on (and the end of terrain hugging).
+      if (u.kind === 'air' && u.def.role === 'fighter' && !u.radarOn) this.setRadar(u, true);
+      if (!this.canGuide(u, t, k)) return false;
       const w = WEAPONS[k];
       if (u.kind === 'air') {
         const off = Math.abs(angNorm(bearing(u, t) - u.hdg));
@@ -1099,7 +1162,8 @@
 
       // Mid-course guidance: updates from the shooter, or the data link for tp missiles.
       let support = m.lock;
-      if (!support && alive) {
+      const lockable = m.kind === 'srm' || m.kind === 'cruise' || !this.isSilent(t);
+      if (!support && alive && lockable) {
         const s = m.shooter;
         const shooterOk = this.isAlive(s) && this.ownTrack(s, t) &&
           (s.kind !== 'air' || Math.abs(angNorm(bearing(s, t) - s.hdg)) <= GIMBAL);
@@ -1152,6 +1216,7 @@
       const d = dist(m, t);
       const off = Math.abs(angNorm(bearing(m, t) - m.hdg));
       if (m.kind !== 'srm' && this.notching(t, m)) return;
+      if (m.kind !== 'srm' && this.isSilent(t)) return;
       if (d <= m.w.seeker * 1.3 && off < 40 * DEG) {
         m.lock = true;
         if (t.kind === 'air' && !m.warned) this.warn(t, m, 'MISSILE WARNING (no prior launch warning!)');
@@ -1237,6 +1302,7 @@
 
     launchCruise(u, k, ref) {
       const w = WEAPONS[k];
+      if (u.kind === 'air') this.setRadar(u, true);   // weapons release needs the radar on
       u.wpn[k]--;
       const m = {
         id: this.nextId++, kind: 'cruise', side: u.side, wkey: k, w, x: u.x, y: u.y,
@@ -1297,15 +1363,6 @@
     aiThink(u) {
       const def = u.def;
       if (def.role === 'aew') return;
-      // Radar discipline: linked fighters stay silent while an AEW&C builds the picture.
-      const aew = this.hasAEW(u.side) && this.ew[ENEMY[u.side]].jam.until <= this.t;
-      const tgt = u.engage || (u.order && u.order.type === 'attack' ? u.order.target : null);
-      const near = tgt && this.isAlive(tgt) && dist(u, tgt) < def.radar;
-      const guiding = this.missiles.some(m => m.shooter === u && !m.lock && !m.w.tp && m.kind !== 'cruise');
-      if (u.radarManual) { /* the player set this flight's radar */ }
-      else if (def.linked) u.radarOn = !aew || guiding || (near && (!this.fireQuality(u, tgt) || !this.tpOnly(u)));
-      else u.radarOn = !!tgt || this.nearestEnemy(u, 150) != null;
-
       if (!this.hasAAM(u) && !this.strikeWeapon(u) && u.order && u.order.type !== 'rtb') { u.engage = null; this.orderRTB(u); return; }
       if (!u.order || u.order.type !== 'orbit' || !u.cap) return;
       if (u.engage && !this.isAlive(u.engage)) u.engage = null;
@@ -1468,6 +1525,16 @@
       u.holdUntil = 0;
     }
     cmdSamRadar(u, on) { u.radarOn = on; }
+    // Player radar mode for a fighter: 'auto', 'on', 'off' or 'low' (terrain hugging).
+    // Returns an error string if the jet is exposed (it can only stay radar-on until it lands).
+    cmdRadarMode(u, mode) {
+      if (u.def.role !== 'fighter') return 'Only fighters can change radar mode';
+      if (u.exposed && mode !== 'on' && mode !== 'auto') return `${u.callsign} is exposed: radar stays on until it lands`;
+      u.radarMode = mode;
+      if (mode === 'on') this.setRadar(u, true);
+      else if (mode === 'off' || mode === 'low') { this.setRadar(u, false); u.low = mode === 'low'; }
+      return null;
+    }
 
     // ---------- missions: the player plans, the AI flies ----------
     // kind: cap | aew | strike | escort | sead | attack. A CAP or AEW&C mission keeps its

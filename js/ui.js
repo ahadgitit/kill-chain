@@ -628,15 +628,31 @@
       `<div class="row">${status(u)}${u.bingo ? ' · <span class="warn">BINGO</span>' : ''}${u.dmg ? ' · <span class="warn">DAMAGED</span>' : ''}${u.mission ? ` · <span class="k">mission</span> ${u.mission.name}` : ''}</div>` +
       (def.role === 'aew' ? '' : wpnRows(u.wpn)) +
       `<div class="row"><span class="k">Fuel</span><span class="bar"><i style="width:${fuelPct}%;${fuelPct < 30 ? 'background:var(--red)' : ''}"></i></span>` +
-      ` · <span class="k">Radar</span> ${def.role === 'aew' ? 'ON (AEW&C)' : u.radarOn ? 'ON' : 'silent'}</div>` +
+      ` · <span class="k">Radar</span> ${def.role === 'aew' ? 'ON (AEW&C)' : radarState(u)}</div>` +
       threatRow + `<div class="note">${def.note}</div>`;
     let btns = '';
     if (def.role === 'fighter') {
+      const mode = u.radarMode || 'auto';
+      const lock = u.exposed ? ' disabled' : '';
+      btns += `<div class="seg radar-seg" title="Radar mode${followers(u).length ? ' (applies to the formation)' : ''}">` +
+        `<button data-act="radar" data-mode="auto" class="${mode === 'auto' ? 'on' : ''}">AUTO</button>` +
+        `<button data-act="radar" data-mode="on" class="${mode === 'on' || u.exposed ? 'on' : ''}">RADAR ON</button>` +
+        `<button data-act="radar" data-mode="off" class="${mode === 'off' && !u.exposed ? 'on' : ''}"${lock}>RADAR OFF</button>` +
+        `<button data-act="radar" data-mode="low" class="${mode === 'low' && !u.exposed ? 'on' : ''}"${lock}>LOW LEVEL</button></div>`;
       if (sim.hasAAM(u)) btns += mbtn('', 'chase') + mbtn('', 'escort');
       if (sim.strikeWeapon(u)) btns += mbtn('', 'strike', `${WEAPONS[sim.strikeWeapon(u)].name} ×${u.wpn[sim.strikeWeapon(u)]}`);
     }
     btns += `<button data-act="rtb" class="danger">RETURN TO BASE</button>`;
     return { info, btns };
+  }
+
+  // Wingmen flying in formation on this jet (radar mode changes apply to them too).
+  function followers(u) { return sim.units.filter(w => w.lead === u && w.state === 'air' && w.inForm); }
+  function radarState(u) {
+    if (u.exposed) return '<span class="warn">ON · EXPOSED until it lands</span>';
+    if (u.low) return '<b>LOW LEVEL</b> (radar off)';
+    const mode = { auto: 'auto', on: 'set ON', off: 'set OFF', low: 'low' }[u.radarMode || 'auto'];
+    return `${u.radarOn ? 'ON' : 'silent'} (${mode})`;
   }
 
   function describeTrack(e) {
@@ -698,6 +714,19 @@
       renderPanel(true); return;
     }
     if (!ref || ref.kind !== 'air') return;
+    if (act === 'radar') {
+      const mode = b.dataset.mode;
+      const err = sim.cmdRadarMode(ref, mode);
+      if (err) { hint(err); renderPanel(true); return; }
+      for (const w of followers(ref)) sim.cmdRadarMode(w, mode);
+      hint({
+        auto: `${ref.callsign}: radar on automatic. It switches on to look and to shoot.`,
+        on: `${ref.callsign}: radar ON. It sees further, but enemy radars can lock it and fire.`,
+        off: `${ref.callsign}: radar OFF. Enemy radars still see it but can't lock it. It only fires at its mission target, switching the radar on to do it.`,
+        low: `${ref.callsign}: LOW LEVEL, radar off. Hidden from AEW&C, ground radars and SAMs; only enemy fighters nearby can see it. Slower and uses more fuel.`,
+      }[mode] + (ref.exposed ? '' : ' Switching the radar on inside enemy airspace exposes the jet until it lands.'));
+      renderPanel(true); return;
+    }
     if (act === 'rtb') {
       if (ref.mission) ref.mission.status = 'done';
       sim.cmdRTB(ref);
@@ -857,7 +886,9 @@
     if (e.code === 'Escape') { ui.plan = null; select(null); }
     const ref = ui.sel && ui.sel.ref;
     if (e.code === 'KeyR' && ref && ref.kind === 'air' && ref.side === ui.side && ref.def.role === 'fighter') {
-      ref.radarOn = !ref.radarOn; renderPanel(true);
+      const err = sim.cmdRadarMode(ref, ref.radarOn ? 'off' : 'on');
+      if (err) hint(err);
+      renderPanel(true);
     }
   });
 

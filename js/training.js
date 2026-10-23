@@ -34,7 +34,7 @@
         <p>Because its radar is locked on you, your radar warning receiver will hear the launch. You get a <b>launch warning</b> right away.</p>`,
       setup(sim, s, b, aew) {
         place(sim, s, 30.6, 75.25, 270); place(sim, b, 30.6, 74.21, 90); place(sim, aew, 30.9, 70.5, 0);
-        b.radarOn = true; s.radarOn = false;
+        b.radarOn = true; b.radarMode = 'on'; s.radarOn = true; s.radarMode = 'on';
       },
       fireAt: 3,
       warn: `<p class="warn"><b>LAUNCH WARNING</b>, PL-15E, 100 km.</p>
@@ -52,7 +52,7 @@
       intro: `<p>This time the J-10CE fires from only <b>35 km</b>. At this range the PL-15E reaches you while still flying above Mach 4. <b>You can't outrun it.</b></p>`,
       setup(sim, s, b, aew) {
         place(sim, s, 30.6, 74.95, 270); place(sim, b, 30.6, 74.59, 90); place(sim, aew, 30.9, 70.5, 0);
-        b.radarOn = true; s.radarOn = false;
+        b.radarOn = true; b.radarMode = 'on'; s.radarOn = true; s.radarMode = 'on';
       },
       fireAt: 2,
       warn: `<p class="warn"><b>LAUNCH WARNING</b>, PL-15E, 35 km. The line stays <b>red</b>: running won't work.</p>
@@ -65,12 +65,12 @@
     },
     {
       title: 'LESSON 3 OF 4 · THE SILENT SHOT (THE KILL CHAIN)',
-      intro: `<p>Now the J-10CE keeps its radar <b>OFF</b>. You can't see it at all. The <b>Erieye</b> AEW&amp;C (circle with a bar, far west) tracks you instead and shares that track over <b>Link-17</b>.</p>
+      intro: `<p>Now the J-10CE keeps its radar <b>OFF</b> and only switches it on at the moment it fires. You can't see it at all. The <b>Erieye</b> AEW&amp;C (circle with a bar, far west) tracks you instead and shares that track over <b>Link-17</b>.</p>
         <p>The J-10 fires a PL-15E using the Erieye's data, and the missile receives course updates over the data link. Your warning receiver hears nothing. Press START and watch for the warning.</p>`,
       setup(sim, s, b, aew) {
         place(sim, s, 30.6, 75.0, 270); place(sim, b, 30.6, 74.2, 90); place(sim, aew, 30.7, 73.15, 0);
         aew.order = { type: 'orbit', ...P(30.7, 73.15), r: 15 };
-        b.radarOn = false; s.radarOn = false;
+        b.radarOn = false; b.radarMode = 'off'; s.radarOn = true; s.radarMode = 'on';
       },
       fireAt: 3,
       warn: `<p class="warn"><b>MISSILE WARNING, no launch warning.</b></p>
@@ -83,12 +83,12 @@
     },
     {
       title: 'LESSON 4 OF 4 · YOUR SHOT',
-      intro: `<p>Your turn. The J-10CE is about 75 km west, radar silent, heading for you.</p>
-        <p>1. Tap <b>STUDENT</b> to select it. 2. Turn <b>RADAR ON</b>: the J-10 appears. 3. Tap the green <b>J-10 track</b> to attack.</p>
+      intro: `<p>Your turn. The J-10CE is about 75 km west, heading for you with its radar <b>on</b>, which means it can be locked. (A jet with its radar <b>off</b> can't be locked by radar missiles at all, only by heat-seekers up close.)</p>
+        <p>1. Tap <b>STUDENT</b> to select it. 2. Turn <b>RADAR ON</b>. 3. Tap the green <b>J-10 track</b> to attack.</p>
         <p>Your Rafale fires a <b>Meteor</b> and then <b>cranks</b>, turning 50° off so its radar keeps guiding the missile. <b>Don't BREAK</b> while your missile is in the air, or it goes blind. Because your radar is on, the J-10 gets a launch warning and will defend.</p>`,
       setup(sim, s, b, aew) {
         place(sim, s, 30.6, 75.0, 270); place(sim, b, 30.6, 74.22, 90); place(sim, aew, 30.9, 70.5, 0);
-        b.radarOn = false; s.radarOn = false;
+        b.radarOn = true; b.radarMode = 'on'; s.radarOn = false; s.radarMode = 'off';
         s.wpn = { METEOR: 2 };
       },
       fireAt: null,
@@ -179,6 +179,7 @@
     if (L.fireAt != null && !T.fired && sim.t - T.t0 >= L.fireAt) {
       T.fired = true;
       sim.sweep();
+      b.lastShot = sim.t; sim.setRadar(b, true);   // firing means radar on
       sim.launch(b, s, 'PL15');
       b.wpn.PL15--;
       T.m = sim.missiles[sim.missiles.length - 1];

@@ -14,6 +14,22 @@
   };
   KC.COL = COL;
   const FONT = '"Share Tech Mono", ui-monospace, Menlo, Consolas, monospace';
+  // Jet silhouettes (right half, nose up; mirrored for the left). Deltas: Rafale, Mirage, J-10.
+  // Swept wing with tailplane: F-16, JF-17, MiG-29, Su-30 (larger, with canards).
+  const DELTA = [[0, -9], [1.2, -4], [6.5, 5], [1.5, 5], [1, 7]];
+  const CANARD_DELTA = [[0, -9], [1.2, -5], [3.2, -2.8], [1.3, -2.4], [6.5, 5], [1.5, 5], [1, 7]];
+  const SWEPT = [[0, -9], [1.1, -3], [6, 2], [6, 3.5], [1.5, 3], [3.6, 6.8], [3.6, 8], [0.8, 7.5]];
+  const SU30 = [[0, -10.5], [1.3, -4.5], [3.4, -3], [1.6, -2.4], [7.5, 2.5], [7.5, 4], [2, 3.6], [4.4, 8], [4.4, 9.2], [1, 8.6]];
+  const SHAPES = { RAFALE: CANARD_DELTA, J10C: CANARD_DELTA, M2000: DELTA, SU30, F16: SWEPT, JF17B3: SWEPT, JF17B2: SWEPT, MIG29: SWEPT };
+  function jetPath(c, type) {
+    const pts = SHAPES[type] || SWEPT;
+    c.beginPath();
+    pts.forEach(([x, y], i) => (i ? c.lineTo(x, y) : c.moveTo(x, y)));
+    for (let i = pts.length - 1; i >= 0; i--) if (pts[i][0]) c.lineTo(-pts[i][0], pts[i][1]);
+    c.closePath();
+  }
+  // Formation slots [right, back] in jet spacings: lead, wingman, element lead, its wingman, then a widening V.
+  const FORMATION = [[0, 0], [-1, 1], [1.2, 0.6], [2.2, 1.6], [-2, 2], [3.2, 2.6], [-3, 3], [4.2, 3.6]];
   const ease = t => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 
   class Renderer {
@@ -569,7 +585,9 @@
         c.beginPath(); c.moveTo(0, -6); c.lineTo(0, -3); c.stroke();
       } else if (kind === 'air' && role === 'fighter') {
         c.rotate(hdg);
-        c.beginPath(); c.moveTo(0, -8); c.lineTo(5.5, 6); c.lineTo(0, 3); c.lineTo(-5.5, 6); c.closePath();
+        const k = (opts && opts.size) || 1;
+        c.scale(k, k); c.lineWidth = 1.5 / k;
+        jetPath(c, (opts && opts.type) || '');
         if (opts && opts.hollow) c.stroke(); else c.fill();
       } else if (kind === 'air') {
         c.beginPath(); c.arc(0, 0, 6, 0, Math.PI * 2); c.stroke();
@@ -585,6 +603,31 @@
         c.beginPath(); c.arc(0, 0, 2.5, 0, Math.PI * 2); c.fill();
       }
       c.restore();
+    }
+
+    // A flight drawn as individual jets in formation (fingertip / finger-four, then a widening V).
+    // Returns the screen half-width of the formation so labels can clear it.
+    drawFlight(u, n, p, col, opts, dmg) {
+      if (u.def.role !== 'fighter' || n <= 1) {
+        this.glyph('air', u.def.role, p.x, p.y, u.hdg, col, { ...opts, type: u.type });
+        return 0;
+      }
+      const slots = FORMATION.slice(0, Math.min(n, FORMATION.length));
+      const sp = 9 * Math.max(0.8, Math.min(1.5, Math.sqrt(this.view.scale)));
+      let mx = 0, my = 0;
+      for (const [a, b] of slots) { mx += a; my += b; }
+      mx /= slots.length; my /= slots.length;
+      const fx = Math.sin(u.hdg), fy = -Math.cos(u.hdg);
+      let half = 0;
+      slots.forEach(([a, b], i) => {
+        const lx = (a - mx) * sp, ly = (b - my) * sp;
+        const x = p.x + fy * -lx + -fx * ly, y = p.y + fx * lx + -fy * ly;
+        half = Math.max(half, Math.abs(x - p.x), Math.abs(y - p.y));
+        // The last jet in the formation carries the damage.
+        const hurt = dmg && i === slots.length - 1;
+        this.glyph('air', 'fighter', x, y, u.hdg, hurt ? COL.hot : col, { ...opts, type: u.type, size: 0.8, hollow: opts.hollow || hurt });
+      });
+      return half;
     }
 
     drawUnits(sim, side, ui) {
@@ -610,11 +653,14 @@
           c.globalAlpha = 1;
         }
         if (u.dead) { this.wreck(p, u.callsign); continue; }
-        this.glyph(u.kind, u.def.role, p.x, p.y, u.hdg, col, { hollow: u.kind === 'air' && !u.radarOn, glow: u.kind === 'air' && !u.ghost, dashed: u.ghost || (u.kind !== 'air' && !u.radarOn) });
+        let half = 0;
+        if (u.kind === 'air') half = this.drawFlight(u, u.count, p, col, { hollow: !u.radarOn, glow: !u.ghost, dashed: u.ghost }, u.dmg > 0);
+        else this.glyph(u.kind, u.def.role, p.x, p.y, u.hdg, col, { dashed: !u.radarOn });
+        const lx = p.x + 11 + Math.max(0, half - 4);
         if (u.kind === 'air' && u.defending) this.label(u.defMode === 'notch' ? 'NOTCH' : 'DRAG', p.x - 11, p.y + 14, COL.site, 'right', 9);
         if (sel) {
           c.strokeStyle = COL.white; c.lineWidth = 1;
-          const r = 12 + Math.sin(performance.now() / 250) * 1.5;
+          const r = 12 + half + Math.sin(performance.now() / 250) * 1.5;
           c.beginPath();
           for (const [dx, dy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
             c.moveTo(p.x + dx * r, p.y + dy * (r - 5)); c.lineTo(p.x + dx * r, p.y + dy * r); c.lineTo(p.x + dx * (r - 5), p.y + dy * r);
@@ -623,8 +669,8 @@
         }
         if (u.kind === 'air' && (showLabels || sel)) {
           const tag = `${u.callsign}${u.count > 1 ? ' ×' + u.count : ''}`;
-          this.label(tag, p.x + 11, p.y - 5, u.ghost ? COL.dim : col, 'left', 10);
-          if (sel || this.view.scale > 1.1) this.label(u.def.name, p.x + 11, p.y + 6, COL.dim, 'left', 9);
+          this.label(tag, lx, p.y - 5, u.ghost ? COL.dim : col, 'left', 10);
+          if (sel || this.view.scale > 1.1) this.label(u.def.name, lx, p.y + 6, COL.dim, 'left', 9);
         } else if (u.kind !== 'air' && (this.view.scale > 0.9 || sel)) {
           this.label(u.callsign, p.x + 9, p.y, COL.dim, 'left', 9);
         }
@@ -728,17 +774,19 @@
         const e = tr.ref;
         c.globalAlpha = stale ? 0.45 : 1;
         const esm = tr.q === 'esm';
+        let half = 0;
         if (e.kind === 'air') {
-          this.glyph('air', e.def.role, p.x, p.y, e.hdg, col, { hollow: true, dashed: esm, glow: !esm && !stale });
+          // A passive (emission-only) track can't resolve how many jets there are.
+          half = this.drawFlight(e, esm ? 1 : (tr.count || e.count), p, col, { hollow: true, dashed: esm, glow: !esm && !stale }, false);
           if (esm) { c.strokeStyle = col; c.beginPath(); c.arc(p.x, p.y, 10, 0, Math.PI * 2); c.setLineDash([2, 3]); c.stroke(); c.setLineDash([]); }
         } else if (e.dead) { this.wreck(p, e.callsign); c.globalAlpha = 1; continue; }
         else this.glyph(e.kind, null, p.x, p.y, 0, col, {});
         const sel = ui.sel && ui.sel.ref === e;
-        if (sel) { c.strokeStyle = COL.white; c.strokeRect(p.x - 11, p.y - 11, 22, 22); }
+        if (sel) { c.strokeStyle = COL.white; c.strokeRect(p.x - 11 - half, p.y - 11 - half, 22 + half * 2, 22 + half * 2); }
         if (e.kind === 'air') {
           const n = tr.count || e.count;
           const name = esm ? `${e.def.name}?` : `${e.def.name}${n > 1 ? ' ×' + n : ''}`;
-          if (this.view.scale > 0.3 || sel) this.label(`T${tr.num} ${name}`, p.x + 11, p.y - 5, col, 'left', 10);
+          if (this.view.scale > 0.3 || sel) this.label(`T${tr.num} ${name}`, p.x + 11 + Math.max(0, half - 4), p.y - 5, col, 'left', 10);
           if (tr.striker && !stale) this.strikerMark(sim, tr, p);
         } else if (this.view.scale > 0.9 || sel) this.label(e.callsign, p.x + 9, p.y, COL.dim, 'left', 9);
         c.globalAlpha = 1;

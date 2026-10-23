@@ -618,14 +618,27 @@
       for (const [a, b] of slots) { mx += a; my += b; }
       mx /= slots.length; my /= slots.length;
       const fx = Math.sin(u.hdg), fy = -Math.cos(u.hdg);
+      // Missile defence: the jets break apart in opposite directions, then rejoin once it's over.
+      // brk eases towards 1 quickly while defending and back to 0 slowly afterwards.
+      const ms = performance.now();
+      const dt = Math.min(0.1, (ms - (u.brkT || ms)) / 1000);
+      u.brkT = ms;
+      u.brk = u.brk || 0;
+      u.brk += u.defending ? (1 - u.brk) * Math.min(1, dt * 4) : -u.brk * Math.min(1, dt * 0.9);
+      if (u.brk < 0.01) u.brk = 0;
+      const brk = ease(u.brk);
       let half = 0;
       slots.forEach(([a, b], i) => {
-        const lx = (a - mx) * sp, ly = (b - my) * sp;
+        // Lead and wingman split to opposite sides; later jets fan out further.
+        const sgn = i % 2 ? -1 : 1, fan = 1 + Math.floor(i / 2) * 0.6;
+        const weave = Math.sin(ms / 420 + i * 1.7) * 0.35;
+        const lx = (a - mx) * sp + sgn * fan * sp * 2.4 * brk, ly = (b - my) * sp + (i % 3) * sp * 0.8 * brk;
         const x = p.x + fy * -lx + -fx * ly, y = p.y + fx * lx + -fy * ly;
+        const hdg = u.hdg + (sgn * 0.8 + weave) * brk;
         half = Math.max(half, Math.abs(x - p.x), Math.abs(y - p.y));
         // The last jet in the formation carries the damage.
         const hurt = dmg && i === slots.length - 1;
-        this.glyph('air', 'fighter', x, y, u.hdg, hurt ? COL.hot : col, { ...opts, type: u.type, size: 0.8, hollow: opts.hollow || hurt });
+        this.glyph('air', 'fighter', x, y, hdg, hurt ? COL.hot : col, { ...opts, type: u.type, size: 0.8, hollow: opts.hollow || hurt });
       });
       return half;
     }

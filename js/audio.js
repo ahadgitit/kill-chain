@@ -6,7 +6,7 @@
   try { muted = localStorage.getItem('kc-sound') === '0'; } catch (e) { /* storage unavailable */ }
   const last = {};
   // Minimum gap between two sounds of the same kind (ms), so fast-forward doesn't turn into noise.
-  const GAP = { launch: 220, lock: 400, rwr: 1300, active: 1300, hit: 260, impact: 380, takeoff: 1500, alarm: 3500, loss: 900, click: 40 };
+  const GAP = { launch: 220, lock: 400, rwr: 1300, active: 1300, hit: 260, impact: 380, takeoff: 1500, alarm: 3500, loss: 900, click: 40, intel: 2500 };
 
   function unlock() {
     if (ctx) { if (ctx.state === 'suspended') ctx.resume(); return; }
@@ -181,6 +181,11 @@
       o.type = 'triangle'; o.frequency.setValueAtTime(440, t); o.frequency.exponentialRampToValueAtTime(180, t + 0.9);
       env(g, t, 0.02, 0.05 * v, 0.9);
       o.connect(g).connect(master); o.start(t); o.stop(t + 1.1);
+    },
+    // Intelligence tell: a short three-note comms chirp, rising.
+    intel(v) {
+      const t = now();
+      [620, 780, 1040].forEach((f, i) => tone('sine', f, t + i * 0.11, 0.09, 0.05 * v));
     },
     click(v) { tone('sine', 2100, now(), 0.025, 0.03 * v); },
   };

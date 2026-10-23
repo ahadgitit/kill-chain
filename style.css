@@ -75,6 +75,7 @@ body.training #ewbar { display: none !important; }
 .ev-impact { color: #ffd166; }
 .ev-shot { color: var(--cyan); }
 .ev-good { color: var(--pk); }
+.ev-intel { color: #d5b8ff; border-left: 2px solid #b48cff; padding-left: 4px; }
 .ev-info { color: var(--text); }
 .ev-t { color: var(--dim); margin-right: 6px; }
 

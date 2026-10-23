@@ -19,6 +19,14 @@ It works on desktop and mobile (touch), with no install and no build step.
 
   You can also select an airborne flight and give it a new mission, or simply tap an enemy with the flight selected.
 - **Early warning.** Enemy strike jets are flagged as soon as they're detected (⚠ STRIKER INBOUND, a pulsing ring and a line to the likely target) and again when they're within 100 km of it. Stand-off weapon ranges are about half the real figures (SCALP 140 km, BrahMos 200 km, CM-400 120 km, H-4 60 km), so strike jets must come within reach of defenders.
+- **The enemy commander.** The opposing side is run by a commander with a doctrine, not a timetable:
+  - **Fighter control:** every intruder in its airspace, and every strike jet heading for it, gets a response with the numbers in its favour (two of its fighters per intruding jet, strikers first), from patrols nearby or scrambled from the nearest base.
+  - **Strike packages:** a fighter sweep goes in first to clear the corridor, then the strike jets follow with escorts.
+  - **Feints and pounces:** it may show fighters toward one target before striking another, and it launches early when your fighters around a target are gone.
+  - **Learning:** targets that cost it strike jets get bigger sweeps, or it switches to a target that's cheaper to hit.
+  - **Raids on your AEW&C** when it flies close to the frontier.
+  - **Phases:** when the night turns against it, it brings its remaining strikes forward into one massed wave, then plans a final push late in the night.
+  - **Tells:** before its big moves the log shows a purple ◆ INTEL line with a chirp, so you can read it and react.
 - **The AI flies everything else.** It dodges missiles (break or notch), manages radar, returns at bingo fuel, refuels and re-arms. AEW&C aircraft take off and orbit on their own, and ready fighters scramble automatically when enemies come near their base.
 - **Limits.**
   - **Weapons:** the decisive ones (Meteor, SCALP-EG, BrahMos-A, PL-15E, CM-400AKG) come from limited national stocks.
@@ -74,7 +82,7 @@ js/mapdata.js  generated map data (Natural Earth), see tools/build_map.py
 js/geo.js      stereographic projection, frontier tests, labels
 js/data.js     aircraft, weapons, SAMs, scenario
 js/sim.js      simulation core: bases, sorties, sensors, link, missiles, strikes, drones, EW, escalation, replay
-js/ai.js       side-level AI commander (CAPs, strikes, drones, EW)
+js/ai.js       enemy commander: fighter control, strike packages, feints, phases, tells
 js/render.js   canvas renderer
 js/audio.js    synthesised sound effects and ambience (Web Audio API)
 js/ui.js       input, HUD, menus, attract mode, game loop

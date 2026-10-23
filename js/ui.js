@@ -310,7 +310,8 @@
   // Sounds for what our side hears about: launches, warnings, locks, hits, take-offs, alarms.
   function soundFor(e) {
     const A = KC.Audio, t = e.text;
-    if (/STRIKER (INBOUND|CLOSING)/.test(t)) A.play('alarm');
+    if (e.cls === 'intel') A.play('intel');
+    else if (/STRIKER (INBOUND|CLOSING)/.test(t)) A.play('alarm');
     else if (/LAUNCH WARNING/.test(t)) A.play('rwr');
     else if (/MISSILE WARNING|MISSILE ACTIVE/.test(t)) A.play('active');
     else if (/airborne from|scrambles/.test(t)) A.play('takeoff', 0.8);

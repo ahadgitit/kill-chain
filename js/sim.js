@@ -704,7 +704,8 @@
     leash(u, h) {
       if (!u.ai || u.def.role === 'drone') return h;
       // Strike flights and their escorts are allowed into enemy airspace.
-      if ((u.order && u.order.type === 'strike') || (u.mission && u.mission.kind === 'escort')) return h;
+      // So are the commander's fighter sweeps and raids (u.offensive).
+      if (u.offensive || (u.order && u.order.type === 'strike') || (u.mission && u.mission.kind === 'escort')) return h;
       const ok = hh => {
         const x = u.x + Math.sin(hh) * 25, y = u.y - Math.cos(hh) * 25;
         return geo.sideOf(x, y) === u.side && geo.frontierDist(x, y) > 10;

@@ -540,7 +540,8 @@
     }
     ui.plan = null;
     if (ms.unit && ms.unit.state === 'air') select(ms.unit); else select(null);
-    const what = pl.kind === 'chase' ? 'chasing the target' : pl.kind === 'escort' ? 'escorting' : `attacking ${pl.target.id}`;
+    const deep = pl.kind === 'chase' && pl.prey && pl.prey.kind === 'air' && KC.geo.sideOf(pl.prey.x, pl.prey.y) !== ui.side;
+    const what = pl.kind === 'chase' ? (deep ? 'chasing; the target is over enemy territory, so they will hold near the border and fire when in range' : 'chasing the target') : pl.kind === 'escort' ? 'escorting' : `attacking ${pl.target.id}`;
     hint(ms.status.startsWith('waiting') ? `${ms.name}: ${ms.status}` : `${ms.name}: ${ms.unit ? ms.unit.callsign + ' ' : ''}${what}${eb ? ', escort launching' : ''}. The AI flies it.`);
     renderMissions();
   }

@@ -1554,8 +1554,12 @@
       };
       if (!this.isAlive(e)) return end('target no longer on radar');
       if (!this.trackFor(ms.side, e)) return end('lost contact with the target');
-      if (e.kind === 'air' && geo.sideOf(e.x, e.y) === e.side && geo.frontierDist(e.x, e.y) > 30 && dist(u, e) > 60) {
-        return end('target turned back into its own airspace');
+      // "Chased away": our jets got close while the target was near (or over) our side,
+      // then it retreated deep into its own airspace.
+      if (e.kind === 'air') {
+        const home = geo.sideOf(e.x, e.y) === e.side, fd = geo.frontierDist(e.x, e.y);
+        if ((!home || fd < 30) && dist(u, e) < 100) ms.wasClose = true;
+        if (ms.wasClose && home && fd > 50 && dist(u, e) > 60) return end('target turned back into its own airspace');
       }
       if (!this.hasAAM(u)) end('out of missiles');
     }

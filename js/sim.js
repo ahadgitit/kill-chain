@@ -1087,8 +1087,8 @@
       const hit = this.rand() < pk;
       if (hit) {
         m.end = 'hit';
-        this.fx.push({ kind: 'kill', x: t.x, y: t.y, t: this.t });
-      } else this.fx.push({ kind: 'miss', x: t.x, y: t.y, t: this.t });
+        this.fx.push({ kind: 'kill', x: t.x, y: t.y, t: this.t, ref: t });
+      } else this.fx.push({ kind: 'miss', x: t.x, y: t.y, t: this.t, ref: t });
 
       if (t.kind === 'cruise') {
         if (hit) {

@@ -516,8 +516,8 @@
       for (const m of sim.missiles) {
         if (!this.missileVisible(sim, m, side)) continue;
         const col = COL[m.side];
-        const p = this.toScreen(m.x, m.y);
         const cruise = m.kind === 'cruise';
+        const p = cruise ? this.toScreen(m.x, m.y) : this.missileAim(m);
         // Fading trail
         const tr = m.trail;
         if (tr.length) {
@@ -551,11 +551,25 @@
       }
     }
 
+    // A missile fired at a flight homes on one jet of the formation, not its centre:
+    // as it closes in, its drawn position bends toward that jet's offset, reaching it at impact.
+    missileAim(m) {
+      const p = this.toScreen(m.x, m.y), t = m.target, o = t && t.jetOff;
+      if (!o) return p;
+      const q = this.toScreen(t.x, t.y);
+      const w = ease(Math.max(0, Math.min(1, 1 - (Math.hypot(p.x - q.x, p.y - q.y) - 4) / 110)));
+      return { x: p.x + o.x * w, y: p.y + o.y * w };
+    }
+    targetPoint(t) {
+      const q = this.toScreen(t.x, t.y), o = t.jetOff;
+      return o ? { x: q.x + o.x, y: q.y + o.y } : q;
+    }
+
     // Incoming missiles: a line to their target, red while the missile still has the
     // energy to reach it, grey once it is too slow. Own missiles: a faint line to the target.
     drawThreatLine(sim, m, side, p) {
       const c = this.ctx, t = m.target;
-      const q = this.toScreen(t.x, t.y);
+      const q = this.targetPoint(t);
       if (m.side === side) {
         c.strokeStyle = COL[side]; c.globalAlpha = 0.25; c.setLineDash([2, 4]);
         c.beginPath(); c.moveTo(p.x, p.y); c.lineTo(q.x, q.y); c.stroke();
@@ -608,6 +622,7 @@
     // A flight drawn as individual jets in formation (fingertip / finger-four, then a widening V).
     // Returns the screen half-width of the formation so labels can clear it.
     drawFlight(u, n, p, col, opts, dmg) {
+      u.jetOff = null;
       if (u.def.role !== 'fighter' || n <= 1) {
         this.glyph('air', u.def.role, p.x, p.y, u.hdg, col, { ...opts, type: u.type });
         return 0;
@@ -647,8 +662,10 @@
         // Nose follows the motion: out while spreading, back in while rejoining, a gentle weave between.
         const turn = Math.max(-1.1, Math.min(1.1, dir * ds * 0.9 + s * Math.cos(wph) * 0.3));
         const h = u.hdg + turn;
-        // The last jet in the formation carries the damage.
+        // The last jet in the formation carries the damage, and it is the jet that
+        // missiles fired at this flight home on (so a kill removes the jet that was hit).
         const hurt = dmg && i === slots.length - 1;
+        if (i === slots.length - 1) u.jetOff = { x: x - p.x, y: y - p.y };
         this.glyph('air', 'fighter', x, y, h, hurt ? COL.hot : col, { ...opts, type: u.type, size: 0.8, hollow: opts.hollow || hurt });
       });
       return half;
@@ -823,7 +840,10 @@
       const c = this.ctx;
       for (const f of sim.fx) {
         const age = sim.t - f.t;
+        // Air hits and misses happen at the jet the missile went for (fixed when first drawn).
+        if (f.ref && f.off === undefined) f.off = f.ref.jetOff ? { ...f.ref.jetOff } : null;
         const p = this.toScreen(f.x, f.y);
+        if (f.off) { p.x += f.off.x; p.y += f.off.y; }
         if (f.kind === 'kill' || f.kind === 'impact') {
           const impact = f.kind === 'impact';
           const col = impact ? COL.hot : COL.white;

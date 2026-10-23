@@ -39,7 +39,7 @@
     HAROP: { name: 'Harop', role: 'drone', mission: 'sead', radar: 0, rcs: 0.15, low: true, ew: 0, speed: 0.11, dash: 0.13, turn: 6, linked: false, value: 1, fuel: 14000, turnaround: 0,
       note: 'Loitering munition. Hunts enemy radars by their emissions, then dives on them. A SAM that switches its radar off is safe from it.' },
     SWARM: { name: 'Loitering drone', role: 'drone', mission: 'attack', radar: 0, rcs: 0.2, low: true, ew: 0, speed: 0.08, dash: 0.09, turn: 6, linked: false, value: 1, fuel: 9000, turnaround: 0,
-      note: 'Cheap one-way attack drones (YIHA / Shahpar class). Weak alone; in numbers they soak up expensive SAM missiles.' },
+      note: 'Cheap one-way attack drones, flown in swarms. Weak alone; in numbers they soak up expensive SAM missiles.' },
   };
 
   // kind: aam (beyond visual range), srm (short range), sam, cruise (incl. glide weapons).
@@ -285,6 +285,30 @@
       },
     },
   ];
+
+  // A hypothetical scenario (not part of the campaign): India's pre-emptive deep strike.
+  NIGHTS.push({
+    n: 5, tag: 'SCENARIO', scenario: true, title: 'OPERATION DEEP STRIKE', date: 'HYPOTHETICAL', start: { h: 1, m: 0 }, duration: 100 * 60,
+    summary: 'India plans a pre-emptive strike on Mushaf air base at Sargodha, deep inside Pakistan behind layered air defences. Drain the SAMs with drone swarms, pull Pakistan\'s fighters away with a diversion, slip in low, hit the base and get home.',
+    targets: { IN: [T('base', 'MUSHAF')], PK: [T('base', 'AMRITSAR'), T('base', 'ADAMPUR')] },
+    // Scenario-only forces: a big Indian drone swarm stock, thinner Pakistani fighter bases, and
+    // layered SAMs along the road from the border to Sargodha.
+    pools: { AMRITSAR: { SWARM: 150 } },
+    counts: { MUSHAF: 6, RAFIQUI: 8, MINHAS: 8 },
+    sams: [['PK', 'LY80-GJW', 'LY80', 32.16, 74.19], ['PK', 'LY80-HFZ', 'LY80', 32.07, 73.69], ['PK', 'HQ9-SGD', 'HQ9', 32.10, 72.55]],
+    ai: {
+      IN: {
+        aew: [['BATHINDA', 30.70, 75.40]],
+        caps: [['ADAMPUR', 2, 31.80, 75.20], ['HALWARA', 2, 31.00, 74.90]],
+        drones: [{ t: 120, base: 'AMRITSAR', type: 'SWARM', n: 100, mode: 'attack', list: [T('base', 'MUSHAF')] }],
+        strikes: [{ t: 2100, base: 'AMBALA', n: 2, preset: 'STRIKE', list: [T('base', 'MUSHAF'), T('base', 'MUSHAF')] }],
+      },
+      PK: {
+        aew: [['NUR KHAN', 32.75, 72.95]],
+        caps: [['MUSHAF', 2, 32.25, 73.00], ['RAFIQUI', 2, 31.40, 73.70], ['MINHAS', 2, 33.00, 73.60]],
+      },
+    },
+  });
 
   // Legacy per-flight loadouts (used by the training mission's pre-placed flights).
   const LOADOUTS = {

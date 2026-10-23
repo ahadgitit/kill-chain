@@ -161,7 +161,7 @@
         let order;
         if (s.mode === 'sead') { const p = P(s.at[0], s.at[1]); order = { type: 'sead', x: p.x, y: p.y, r: 20 }; }
         else order = { type: 'drone', list: s.list.map(x => ({ ...x })) };
-        if (this.launch(s.base, s.n, null, order)) s.done = true;
+        if (this.launch(s.base, s.n, null, order, s.type)) s.done = true;
       }
     }
 
@@ -204,7 +204,8 @@
         const want = th.striker ? Math.min(4, Math.max(2, th.e.count + 1)) : Math.min(4, th.e.count * 2);
         let have = this.committed(th.e);
         while (have < want) {
-          const u = this.idleFighterNear(th.p, 180);
+          // A strike gets fighters pulled from further afield (which is what makes a diversion work).
+          const u = this.idleFighterNear(th.p, th.striker ? 250 : 180);
           if (!u) break;
           u.engage = th.e;
           u.anchor = { x: u.cap.x, y: u.cap.y, r: u.cap.r };

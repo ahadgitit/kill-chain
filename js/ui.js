@@ -29,9 +29,10 @@
   const SUBCONTINENT = [5.0, 60.0, 38.5, 97.0];
   R.fit(...SUBCONTINENT, 10);
 
+  const CAMP_N = NIGHTS.filter(n => !n.scenario).length;   // scenarios are not part of the campaign
   const nightCfg = (idx, carry) => {
     const n = NIGHTS[idx];
-    return { name: `NIGHT ${n.n}: ${n.title}`, start: n.start, duration: n.duration, night: n, carry };
+    return { name: `${n.tag || 'NIGHT ' + n.n}: ${n.title}`, start: n.start, duration: n.duration, night: n, carry };
   };
 
   // ---------- attract mode: an AI-vs-AI battle runs behind the main menu ----------
@@ -81,7 +82,7 @@
     const saved = loadCampaign();
     $('menu-modes').innerHTML = `
       <button class="side CAMP" data-go="campaign"><b>CAMPAIGN · 4 NIGHTS</b><span>6–10 May 2025, night by night. Losses, weapon stocks and damaged bases carry over. Highest total wins.</span></button>
-      ${saved && saved.night < NIGHTS.length ? `<button class="side CAMP" data-go="continue"><b>CONTINUE CAMPAIGN</b><span>${SIDE_NAME[saved.side]} · next: night ${saved.night + 1}, ${NIGHTS[saved.night].title}. Total so far IND ${saved.totals.IN} · PAK ${saved.totals.PK}.</span></button>` : ''}
+      ${saved && saved.night < CAMP_N ? `<button class="side CAMP" data-go="continue"><b>CONTINUE CAMPAIGN</b><span>${SIDE_NAME[saved.side]} · next: night ${saved.night + 1}, ${NIGHTS[saved.night].title}. Total so far IND ${saved.totals.IN} · PAK ${saved.totals.PK}.</span></button>` : ''}
       <button class="side NIGHT" data-go="nights"><b>SINGLE NIGHT</b><span>Play any one night: opening strikes, drone night, retaliation or the airbase strikes.</span></button>
       <button class="side TR" data-go="training"><b>TRAINING: MISSILE EVASION</b><span>Four short lessons on long, short and silent shots, and taking your own. Start here.</span></button>`;
     for (const b of document.querySelectorAll('#menu-modes [data-go]')) {
@@ -96,7 +97,7 @@
   }
   function menuNights() {
     $('menu-modes').innerHTML = NIGHTS.map((n, i) => `
-      <button class="side NIGHT" data-i="${i}"><b>NIGHT ${n.n} · ${n.title}</b><span>${n.date}. ${n.summary}</span></button>`).join('') +
+      <button class="side NIGHT" data-i="${i}"><b>${n.tag || 'NIGHT ' + n.n} · ${n.title}</b><span>${n.date}. ${n.summary}</span></button>`).join('') +
       `<button class="link" id="menu-back">BACK</button>`;
     for (const b of document.querySelectorAll('#menu-modes [data-i]')) b.onclick = () => menuSide(+b.dataset.i, false);
     $('menu-back').onclick = menuHome;
@@ -105,7 +106,7 @@
     const n = NIGHTS[idx];
     const goal = s => n.targets[s].length ? `Attack ${n.targets[s].length} priority targets` : 'Defend';
     $('menu-modes').innerHTML = `
-      <div class="pick-h">${camp ? 'CAMPAIGN' : `NIGHT ${n.n} · ${n.title}`}: CHOOSE YOUR SIDE</div>
+      <div class="pick-h">${camp ? 'CAMPAIGN' : `${n.tag || 'NIGHT ' + n.n} · ${n.title}`}: CHOOSE YOUR SIDE</div>
       <div class="sides">
         <button class="side IN" data-side="IN"><b>COMMAND INDIA</b><span>${camp ? 'Strike first on night 1, then fight a war of air bases.' : goal('IN') + '.'} Rafale, Su-30MKI, MiG-29, Mirage 2000, Netra, Phalcon, S-400, Harop.</span></button>
         <button class="side PK" data-side="PK"><b>COMMAND PAKISTAN</b><span>${camp ? 'Defend on night 1, then strike back.' : goal('PK') + '.'} J-10CE, JF-17, F-16, Erieye, ZDK-03, HQ-9/P, drone swarms.</span></button>
@@ -166,9 +167,10 @@
       2: { IN: 'Send Harop drones from AMRITSAR on GROUND ATTACK against Lahore\'s radar and SAMs. Your fighters scramble on their own against drone swarms near your bases.', PK: 'Send drone GROUND ATTACKs from SIALKOT in several waves: they are slow and cheap. Turn SAM radars OFF if Harops are hunting them.' },
       3: { IN: 'CM-400s have about 100 km of reach, so Pakistani strike jets must come close: CHASE them as soon as the ⚠ STRIKER warning appears. Counter-strike SIALKOT and MURID with Rafales.', PK: 'Send GROUND ATTACKs from RAFIQUI and PESHAWAR with 2 escorts each. CM-400 reaches about 100 km, so expect Indian interceptors.' },
       4: { IN: 'Send Su-30s from HALWARA and JODHPUR on GROUND ATTACK with escorts. BrahMos-A reaches about 170 km. A ceasefire comes at 45 min.', PK: 'CHASE the Su-30s on the ⚠ STRIKER warning, before they fire: BrahMos is fast and hard to intercept. Counter-strike ADAMPUR and PATHANKOT.' },
+      5: { IN: '1) AMRITSAR: send 100 drones on GROUND ATTACK at MUSHAF, with waypoints over Gujranwala and Hafizabad so the swarm crosses every SAM layer. Watch the SAM bars empty: each needs 10 min to reload. 2) When the SAMs run dry, send a DIVERSION from PATHANKOT or ADAMPUR at a target far from Sargodha, such as SIALKOT or KOTLI, to pull the defending fighters away. 3) Then send Rafales from AMBALA on GROUND ATTACK at MUSHAF along the drones\' route, set to LOW LEVEL. They climb and fire near the target, and the whole package goes loud. 4) Run for the border: the further your diversion pulled Pakistan\'s fighters, the better your chances.', PK: 'Mushaf at Sargodha is India\'s target. Indian drones will try to drain your SAMs (only SAMs can kill drones). Keep fighters near Sargodha even when a raid appears elsewhere: it may be a diversion. Low-level strikers are invisible to radars, so patrol with fighters on the likely route.' },
     }[n.n][side];
     $('debrief-body').innerHTML = `
-      <div class="h">NIGHT ${n.n} · ${n.title} <span class="k">${n.date}</span></div>
+      <div class="h">${n.tag || 'NIGHT ' + n.n} · ${n.title} <span class="k">${n.date}</span></div>
       <p>${n.summary} You command <b class="${side}">${SIDE_NAME[side].toUpperCase()}</b>. Every aircraft starts on the ground.</p>
       <div class="brief-grid">
         <div><div class="h2">YOUR PRIORITY TARGETS</div>${mine.length ? '<ul class="tlist">' + mine.map(o => `<li>${targetLabel(o)}</li>`).join('') + '</ul><p class="k">10 points each.</p>' : '<p class="k">None tonight: your job is to defend.</p>'}</div>
@@ -220,9 +222,9 @@
     }
     const row = (k, a, b) => `<tr><td>${k}</td><td>${a}</td><td>${b}</td></tr>`;
     const objRows = side => sim.objectives[side].map(o => { const h = Math.min(3, (o.ref && o.ref.hits) || 0); return `<li class="${h ? 'hit' : ''}">${h >= 3 ? '✓' : h ? '◐' : '✗'} ${o.id} ${h}/3</li>`; }).join('');
-    const campDone = campaign && current.campaign && campaign.night >= NIGHTS.length;
+    const campDone = campaign && current.campaign && campaign.night >= CAMP_N;
     $('debrief-body').innerHTML = `
-      <div class="h">DEBRIEF · NIGHT ${n.n}: ${sim.endReason || ''}</div>
+      <div class="h">DEBRIEF · ${n.tag || 'NIGHT ' + n.n}: ${sim.endReason || ''}</div>
       <div class="verdict">${verdict}</div>
       <table class="res">
         <tr><th></th><th class="IN">INDIA</th><th class="PK">PAKISTAN</th></tr>
@@ -480,6 +482,7 @@
     escort: ['ESCORT', 'Tap one of your ground-attack flights. Air-to-air missiles.'],
     strike: ['GROUND ATTACK', 'Tap a site, radar, SAM or air base.'],
     attack: ['GROUND ATTACK', 'Tap a site, radar, SAM or air base. One-way drones.'],
+    feint: ['DIVERSION', 'Fake a strike, radars on, to pull enemy fighters away.'],
   };
   const mbtn = (attrs, kind, extra) => `<button class="mbtn" data-act="mission" data-kind="${kind}" ${attrs}><b>${MISSION_TXT[kind][0]}</b><span>${extra || MISSION_TXT[kind][1]}</span></button>`;
   function missionButtons(b, ty) {
@@ -487,7 +490,7 @@
     const attrs = `data-base="${b.id}" data-type="${ty}"`;
     if (def.role === 'aew') return `<div class="k">AEW&amp;C aircraft fly automatically: they take off, orbit and are relieved on their own.</div>`;
     if (def.role === 'drone') return mbtn(attrs, 'attack');
-    let out = mbtn(attrs, 'chase') + mbtn(attrs, 'escort');
+    let out = mbtn(attrs, 'chase') + mbtn(attrs, 'escort') + mbtn(attrs, 'feint');
     const wk = sim.missionWeapon(ty, 'STRIKE');
     if (wk) out += mbtn(attrs, 'strike', `${WEAPONS[wk].name}, launches from ~${Math.round(WEAPONS[wk].range * 0.85)} km. No air-to-air missiles.`);
     return out;
@@ -517,12 +520,12 @@
       const up = sim.units.filter(u => u.kind === 'air' && u.state === 'air' && u.base === b.id && u.type === ty && !u.ghost).reduce((a, u) => a + u.count, 0);
       const next = p.rearm.length ? Math.min(...p.rearm) - sim.t : 0;
       const key = b.id + ty;
-      const nDeploy = Math.max(1, Math.min(ui.deployN[key] || (def.role === 'drone' ? 4 : 2), Math.max(1, p.ready)));
+      const nDeploy = Math.max(1, Math.min(ui.deployN[key] || (def.role === 'drone' ? Math.min(p.ready, def.mission === 'attack' ? 20 : 4) : 2), Math.max(1, p.ready)));
       ui.deployN[key] = nDeploy;
       btns += `<div class="pool">
         <div class="pool-h"><b>${def.name}</b><span>${p.ready} ready · ${p.rearm.length} re-arming${p.rearm.length ? ` (next ${fmtT(next)})` : ''} · ${up} airborne</span></div>
         ${def.role !== 'aew' ? `<div class="deploy"><span class="k">Send</span>
-          <button data-act="n-" data-key="${key}">−</button><span class="n">${nDeploy}</span><button data-act="n+" data-key="${key}" data-max="${p.ready}">+</button><span class="k">aircraft on:</span></div>` : ''}
+          <button data-act="n-" data-key="${key}" data-step="${def.role === 'drone' ? 10 : 1}">−</button><span class="n">${nDeploy}</span><button data-act="n+" data-key="${key}" data-max="${p.ready}" data-step="${def.role === 'drone' ? 10 : 1}">+</button><span class="k">${def.role === 'drone' ? 'drones on:' : 'aircraft on:'}</span></div>` : ''}
         <div class="mgrid">${missionButtons(b, ty)}</div></div>`;
     }
     return { info, btns };
@@ -534,7 +537,18 @@
     const who = pl.unit ? `${pl.unit.callsign} (${pl.unit.def.name} ×${pl.unit.count})` : `${pl.n} ${AIRCRAFT[pl.type].name} from <b>${pl.base}</b>`;
     let info = head(MISSION_TXT[pl.kind][0], ui.side) + `<div class="row">${who}</div>`;
     let btns = '';
-    if (pl.kind === 'strike' && pl.target) {
+    const routed = (pl.kind === 'strike' || pl.kind === 'attack' || pl.kind === 'feint') && pl.target;
+    if (routed) {
+      const n = (pl.via || []).length;
+      info += `<div class="row"><span class="k">Route</span> ${n ? `${n} waypoint${n > 1 ? 's' : ''}, then the target` : 'direct to the target'}${pl.addingWp ? ' · <span class="warm">tap the map to place a waypoint</span>' : ''}</div>`;
+      btns += `<div class="seg2 wide"><button data-act="wp-add" class="${pl.addingWp ? 'on' : ''}">+ WAYPOINT</button>${n ? '<button data-act="wp-clear">CLEAR ROUTE</button>' : ''}</div>`;
+    }
+    if (pl.kind !== 'strike' && routed) {
+      info += pl.kind === 'feint'
+        ? `<div class="row">Fake target: <b>${pl.target.id}</b></div><div class="row k">Your jets fly at it with radars ON so the enemy reads it as a strike and sends fighters. They turn for home when enemy fighters come close or they get within 70 km, dragging the defenders with them.</div>`
+        : `<div class="row">Target: <b>${pl.target.id}</b></div><div class="row k">The swarm flies the route to the target. Only SAMs can shoot drones down, so a big swarm can drain the SAMs along its path; empty SAMs need ${KC.SAM_RELOAD / 60} minutes to reload, and have only one spare magazine.</div>`;
+      btns += `<button data-act="plan-go" class="go">LAUNCH</button>`;
+    } else if (pl.kind === 'strike' && pl.target) {
       const room = escortRoom();
       const esc = Math.min(pl.escortN || 0, room);
       info += `<div class="row">Target: <b>${pl.target.id}</b> · 3 hits destroy it</div>` +
@@ -543,7 +557,7 @@
       if (room) btns += `<div class="seg2 wide">` + [0, 1, 2].filter(n => n <= room).map(n => `<button data-act="escn" data-n="${n}" class="${esc === n ? 'on' : ''}">${n ? n + ' ESCORT' + (n > 1 ? 'S' : '') : 'NO ESCORT'}</button>`).join('') + `</div>`;
       btns += `<button data-act="plan-go" class="go">LAUNCH${esc ? ` + ${esc} ESCORT` : ''}</button>`;
     } else {
-      info += `<div class="row warm">${{ chase: 'Tap an enemy aircraft (or cruise missile) to chase.', escort: 'Tap one of your ground-attack flights to escort.', strike: 'Tap an enemy target: site, radar, SAM or air base.', attack: 'Tap an enemy target: site, radar, SAM or air base.' }[pl.kind]}</div>`;
+      info += `<div class="row warm">${{ chase: 'Tap an enemy aircraft (or cruise missile) to chase.', escort: 'Tap one of your ground-attack flights to escort.', strike: 'Tap an enemy target: site, radar, SAM or air base.', attack: 'Tap an enemy target: site, radar, SAM or air base.', feint: 'Tap an enemy target to fake an attack on.' }[pl.kind]}</div>`;
     }
     btns += `<button data-act="plan-cancel" class="danger">CANCEL</button>`;
     return { info, btns };
@@ -558,7 +572,7 @@
   }
   function launchPlan() {
     const pl = ui.plan;
-    const m = { kind: pl.kind, preset: pl.kind === 'strike' ? 'STRIKE' : pl.kind === 'attack' ? null : 'AIR', target: pl.target, prey: pl.prey, escortUnit: pl.escortUnit };
+    const m = { kind: pl.kind, preset: pl.kind === 'strike' ? 'STRIKE' : pl.kind === 'attack' ? null : 'AIR', target: pl.target, prey: pl.prey, escortUnit: pl.escortUnit, via: pl.via && pl.via.length ? pl.via : undefined };
     const escN = pl.kind === 'strike' ? Math.min(pl.escortN || 0, escortRoom()) : 0;
     const ms = pl.unit ? sim.assignMission(pl.unit, m) : sim.createMission({ ...m, side: ui.side, base: pl.base, type: pl.type, n: pl.n });
     const eb = escN ? { base: pl.base, type: pl.type } : null;
@@ -570,15 +584,16 @@
     ui.plan = null;
     if (ms.unit && ms.unit.state === 'air') select(ms.unit); else select(null);
     const deep = pl.kind === 'chase' && pl.prey && pl.prey.kind === 'air' && KC.geo.sideOf(pl.prey.x, pl.prey.y) !== ui.side;
-    const what = pl.kind === 'chase' ? (deep ? 'chasing; the target is over enemy territory, so they will hold near the border and fire when in range' : 'chasing the target') : pl.kind === 'escort' ? 'escorting' : `attacking ${pl.target.id}`;
+    const what = pl.kind === 'feint' ? `faking a strike on ${pl.target.id}, radars on` : pl.kind === 'attack' ? `swarm heading for ${pl.target.id}` : pl.kind === 'chase' ? (deep ? 'chasing; the target is over enemy territory, so they will hold near the border and fire when in range' : 'chasing the target') : pl.kind === 'escort' ? 'escorting' : `attacking ${pl.target.id}`;
     hint(ms.status.startsWith('waiting') ? `${ms.name}: ${ms.status}` : `${ms.name}: ${ms.unit ? ms.unit.callsign + ' ' : ''}${what}${eb ? ', escort launching' : ''}. The AI flies it.`);
     renderMissions();
   }
   // Is a picked thing a valid target for the mission being planned?
   function planTarget(pl, hit) {
     if (!hit) return null;
-    if (pl.kind === 'chase') return hit.kind === 'enemy' && (hit.ref.kind === 'air' || hit.ref.kind === 'cruise') ? { prey: hit.ref } : null;
+    if (pl.kind === 'chase') return hit.kind === 'enemy' && ((hit.ref.kind === 'air' && !sim.isDrone(hit.ref)) || hit.ref.kind === 'cruise') ? { prey: hit.ref } : null;
     if (pl.kind === 'escort') return hit.kind === 'own' && hit.ref.kind === 'air' && hit.ref !== pl.unit && (sim.strikeWeapon(hit.ref) || (hit.ref.mission && hit.ref.mission.kind === 'strike')) ? { escortUnit: hit.ref } : null;
+    // Strikes, drone attacks and diversions all aim at enemy sites, radars, SAMs or bases.
     const strikeable = hit.ref.side !== ui.side && (hit.kind === 'site' || hit.kind === 'ebase' || (hit.kind === 'enemy' && (hit.ref.kind === 'sam' || hit.ref.kind === 'radar')));
     return strikeable ? { target: { kind: hit.ref.kind, id: sim.targetId(hit.ref) } } : null;
   }
@@ -639,7 +654,7 @@
         `<button data-act="radar" data-mode="on" class="${mode === 'on' || u.exposed ? 'on' : ''}">RADAR ON</button>` +
         `<button data-act="radar" data-mode="off" class="${mode === 'off' && !u.exposed ? 'on' : ''}"${lock}>RADAR OFF</button>` +
         `<button data-act="radar" data-mode="low" class="${mode === 'low' && !u.exposed ? 'on' : ''}"${lock}>LOW LEVEL</button></div>`;
-      if (sim.hasAAM(u)) btns += mbtn('', 'chase') + mbtn('', 'escort');
+      if (sim.hasAAM(u)) btns += mbtn('', 'chase') + mbtn('', 'escort') + mbtn('', 'feint');
       if (sim.strikeWeapon(u)) btns += mbtn('', 'strike', `${WEAPONS[sim.strikeWeapon(u)].name} ×${u.wpn[sim.strikeWeapon(u)]}`);
     }
     btns += `<button data-act="rtb" class="danger">RETURN TO BASE</button>`;
@@ -696,15 +711,18 @@
         ui.plan = { base: b.dataset.base, type: b.dataset.type, kind, n: ui.deployN[key] || 2 };
       } else if (ref && ref.kind === 'air') ui.plan = { unit: ref, kind };
       else return;
-      hint({ chase: 'Tap an enemy aircraft to chase', escort: 'Tap one of your ground-attack flights', strike: 'Tap an enemy target', attack: 'Tap an enemy target' }[kind]);
+      hint({ chase: 'Tap an enemy aircraft to chase', escort: 'Tap one of your ground-attack flights', strike: 'Tap an enemy target', attack: 'Tap an enemy target', feint: 'Tap the enemy target to fake an attack on' }[kind]);
       renderPanel(true); return;
     }
     if (act === 'plan-cancel') { ui.plan = null; renderPanel(true); return; }
     if (act === 'plan-go') { launchPlan(); return; }
     if (act === 'escn') { ui.plan.escortN = +b.dataset.n; renderPanel(true); return; }
+    if (act === 'wp-add') { ui.plan.addingWp = !ui.plan.addingWp; if (ui.plan.addingWp) hint(`Tap the map to place waypoint ${(ui.plan.via || []).length + 1}`); renderPanel(true); return; }
+    if (act === 'wp-clear') { ui.plan.via = []; ui.plan.addingWp = false; renderPanel(true); return; }
     if (act === 'n-' || act === 'n+') {
       const k = b.dataset.key;
-      ui.deployN[k] = Math.max(1, (ui.deployN[k] || 2) + (act === 'n+' ? 1 : -1));
+      const step = +b.dataset.step || 1;
+      ui.deployN[k] = Math.max(1, (ui.deployN[k] || 2) + (act === 'n+' ? step : -step));
       if (act === 'n+' && b.dataset.max) ui.deployN[k] = Math.min(ui.deployN[k], Math.max(1, +b.dataset.max));
       renderPanel(true); return;
     }
@@ -765,12 +783,21 @@
     if (!sim || replay) return;
     const w = R.toWorld(sx, sy);
     const hit = pick(sx, sy);
+    if (ui.plan && ui.plan.addingWp) {
+      ui.plan.via = ui.plan.via || [];
+      if (ui.plan.via.length < 6) ui.plan.via.push({ x: w.x, y: w.y });
+      ui.plan.addingWp = false;
+      hint(`Waypoint ${ui.plan.via.length} set. Add another, or LAUNCH.`);
+      renderPanel(true);
+      return;
+    }
     if (ui.plan) {
       const t = planTarget(ui.plan, hit);
-      if (!t) { hint({ chase: 'Tap an enemy aircraft', escort: 'Tap one of your ground-attack flights', strike: 'Tap an enemy site, radar, SAM or air base', attack: 'Tap an enemy site, radar, SAM or air base' }[ui.plan.kind]); return; }
+      if (!t && ui.plan.kind === 'chase' && hit && hit.ref.kind === 'air' && sim.isDrone(hit.ref)) { hint('Fighters can\'t stop a drone swarm: only SAMs can shoot drones down.'); return; }
+      if (!t) { hint({ chase: 'Tap an enemy aircraft', escort: 'Tap one of your ground-attack flights', strike: 'Tap an enemy site, radar, SAM or air base', attack: 'Tap an enemy site, radar, SAM or air base', feint: 'Tap an enemy site, radar, SAM or air base' }[ui.plan.kind]); return; }
       Object.assign(ui.plan, t);
-      if (ui.plan.kind === 'strike' && !ui.plan.unit) {   // confirm, with an optional escort
-        if (ui.plan.escortN == null) ui.plan.escortN = Math.min(1, escortRoom());
+      if (ui.plan.kind === 'strike' || ui.plan.kind === 'attack' || ui.plan.kind === 'feint') {   // confirm: route (and escort)
+        if (ui.plan.kind === 'strike' && ui.plan.escortN == null) ui.plan.escortN = Math.min(1, escortRoom());
         renderPanel(true);
         return;
       }

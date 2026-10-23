@@ -18,6 +18,8 @@
   const LOW_SPEED = 0.85;        // terrain hugging: slower ...
   const LOW_FUEL = 1.6;          // ... and thirstier
   const LOW_LOOKDOWN = 0.6;      // fighter radars see a low flyer at this fraction of their range
+  const SAM_RELOAD = 600;        // seconds for an empty SAM battery to reload
+  const SAM_RELOADS = 1;         // spare magazines per site per night
   const EW = {
     jam: { dur: 75, cd: 360, name: 'LINK JAM' },
     barrage: { dur: 60, cd: 240, r: 120, name: 'BARRAGE JAM' },
@@ -74,9 +76,12 @@
       this.stocks = carry ? JSON.parse(JSON.stringify(carry.stocks)) : JSON.parse(JSON.stringify(STOCKS));
       this.bases = BASES.map(b => {
         const base = { id: b.id, side: b.side, x: b.x, y: b.y, kind: 'base', home: b.type, pools: {}, preset: {}, damage: 0 };
-        const n = cfg.emptyBases ? 0 : carry && carry.pools[b.id] ? null : b.count;
+        const n = cfg.emptyBases ? 0 : carry && carry.pools[b.id] ? null : (this.night && this.night.counts && this.night.counts[b.id] != null ? this.night.counts[b.id] : b.count);
         if (b.type && n != null) base.pools[b.type] = { ready: n, rearm: [] };
         if (carry && carry.pools[b.id]) for (const [ty, c] of Object.entries(carry.pools[b.id])) base.pools[ty] = { ready: c, rearm: [] };
+        // Scenario extras: more aircraft or drone types at a base.
+        const extra = !cfg.emptyBases && this.night && this.night.pools && this.night.pools[b.id];
+        if (extra) for (const [ty, c] of Object.entries(extra)) base.pools[ty] = { ready: c, rearm: [] };
         for (const ty of Object.keys(base.pools)) base.preset[ty] = b.type === ty && b.preset ? b.preset : Object.keys(PRESETS[ty])[0];
         if (carry && carry.damage[b.id]) base.damage = carry.damage[b.id];
         return base;
@@ -85,6 +90,7 @@
       const deadStatics = new Set(carry ? carry.deadStatics : []);
       if (!cfg.noStatics) {
         for (const d of SAM_SITES) this.addStatic('sam', d, deadStatics.has(d.callsign));
+        for (const [side, callsign, type, la, lo] of (this.night && this.night.sams) || []) this.addStatic('sam', { side, callsign, type, pos: geo.project(la, lo) });
         for (const d of RADAR_SITES) this.addStatic('radar', d, deadStatics.has(d.callsign));
       }
       for (const d of cfg.flights || []) this.addFlight(d);
@@ -147,7 +153,7 @@
         id: this.nextId++, kind, side: d.side, callsign: d.callsign, type: d.type,
         x: d.pos.x, y: d.pos.y, hdg: 0, spd: 0, linked: true, seen: {}, lastShot: -99, dead: !!dead, radarOn: true,
       };
-      if (kind === 'sam') { u.def = SAMS[d.type]; u.ammo = u.def.ammo; u.range = u.def.radar; }
+      if (kind === 'sam') { u.def = SAMS[d.type]; u.ammo = u.def.ammo; u.range = u.def.radar; u.reloads = SAM_RELOADS; }
       else { u.range = d.range; u.def = { name: 'Ground radar' }; }
       this.units.push(u);
     }
@@ -155,7 +161,13 @@
       if (!o) return null;
       const c = { ...o };
       if (o.list) c.list = o.list.map(x => ({ ...x }));
+      if (o.via) c.via = o.via.map(p => ({ x: p.x, y: p.y }));
       return c;
+    }
+    // Planned route: fly through the waypoints in order (passed within 8 km), then on to the target.
+    viaAim(u, o) {
+      while (o.via && o.via.length && dist(u, o.via[0]) < 8) o.via.shift();
+      return o.via && o.via.length ? o.via[0] : null;
     }
     base(id) { return this.bases.find(b => b.id === id); }
     site(id) { return this.sites.find(s => s.id === id); }
@@ -434,7 +446,8 @@
       for (const side of SIDES) {
         for (const tr of this.tracks[side].values()) {
           const e = tr.ref;
-          if (e.kind !== 'air' || e.ghost || !this.isAlive(e) || !e.order || e.order.type !== 'strike' || !e.order.list.length) continue;
+          // A diversion is built to look exactly like a strike.
+          if (e.kind !== 'air' || e.ghost || !this.isAlive(e) || !e.order || (e.order.type !== 'strike' && e.order.type !== 'feint') || e.order.done || !e.order.list.length) continue;
           const job = e.order.list[0];
           const tgt = this.refFor(job.kind, job.id);
           if (!tgt) continue;
@@ -576,7 +589,7 @@
         }
         u.preset = preset;
         u.ai = opts.ai != null ? opts.ai : b.side !== this.player;
-        u.order = jobs ? { type: 'strike', list: jobs[i] } : this.cloneOrder(order);
+        u.order = jobs ? { type: 'strike', list: jobs[i], ...(order.via ? { via: order.via.map(p => ({ x: p.x, y: p.y })) } : {}) } : this.cloneOrder(order);
         const aim = order.x != null ? order : this.orderPoint(u) || b;
         u.hdg = bearing(b, aim) || u.hdg;
         if (u.ai && u.order.type === 'orbit') u.cap = { x: u.order.x, y: u.order.y, r: u.order.r || 15 };
@@ -673,7 +686,7 @@
     }
     land(u, b) {
       u.state = 'landed';
-      u.exposed = false; u.low = false; u.radarMode = 'auto';
+      u.exposed = false; u.low = false; u.radarMode = 'auto'; u.egress = false;
       this.regroup(u);
       u.threats = []; u.defending = false;
       const p = b.pools[u.type] || (b.pools[u.type] = { ready: 0, rearm: [] });
@@ -763,7 +776,8 @@
 
       // Fuel.
       u.fuel -= dt * (u.spd > def.speed * 1.1 ? 2.5 : 1) * (u.low ? LOW_FUEL : 1);
-      if (!u.bingo && u.order && u.order.type !== 'rtb') {
+      // (A wingman following its lead home still checks its own fuel: it may be further out.)
+      if (!u.bingo && u.order && (u.order.type !== 'rtb' || (u.lead && u.order === u.lead.order))) {
         const b = this.nearestOpenBase(u.side, u, u.type) || this.base(u.base);
         if (u.fuel < dist(u, b) / def.speed + 600) {
           u.bingo = true;
@@ -771,8 +785,8 @@
           if (!u.ai && engaged && this.promptFor('bingo', u)) {
             // the player decides (see answer())
           } else {
-            this.log(u.side, `${u.callsign} BINGO fuel, returning to base`, 'warn');
-            this.orderRTB(u);
+            this.log(u.side, `${u.callsign} BINGO fuel, returning to ${b.id}`, 'warn');
+            this.orderRTB(u, b.id);   // the base the fuel check was made against
           }
         }
       }
@@ -836,9 +850,12 @@
           o.base = b.id;
         }
         if (dist(u, b) < 6) { this.land(u, b); return { hdg: u.hdg, spd: 0 }; }
-        return { hdg: bearing(u, b), spd: def.speed };
+        // After a strike, race for home at full speed while still over enemy territory.
+        const run = u.egress && geo.sideOf(u.x, u.y) !== u.side;
+        return { hdg: bearing(u, b), spd: run ? def.dash : def.speed };
       }
       if (o.type === 'strike') return this.steerStrike(u, o);
+      if (o.type === 'feint') return this.steerFeint(u, o);
       return { hdg: u.hdg, spd: def.speed };
     }
     orbitAt(u, p) {
@@ -854,7 +871,7 @@
       if (!u.ai || u.def.role === 'drone') return h;
       // Strike flights and their escorts are allowed into enemy airspace.
       // So are the commander's fighter sweeps and raids (u.offensive).
-      if (u.offensive || (u.lead && u.lead.offensive) || (u.order && u.order.type === 'strike') || (u.mission && u.mission.kind === 'escort')) return h;
+      if (u.offensive || (u.lead && u.lead.offensive) || (u.order && (u.order.type === 'strike' || u.order.type === 'feint')) || (u.mission && u.mission.kind === 'escort')) return h;
       const ok = hh => {
         const x = u.x + Math.sin(hh) * 25, y = u.y - Math.cos(hh) * 25;
         return geo.sideOf(x, y) === u.side && geo.frontierDist(x, y) > 10;
@@ -923,6 +940,9 @@
         u.holding = false;
         u.holdPt = null;
       }
+      // Fly the planned route first.
+      const wp = !u.firing && this.viaAim(u, o);
+      if (wp) return { hdg: bearing(u, wp), spd: def.speed };
       // Press in as close as possible; fire early only if threatened.
       // An escort flying with the striker keeps it pressing in; a missile at it never does.
       const escorted = this.units.some(e => e.side === u.side && e.state === 'air' && e.mission && e.mission.kind === 'escort' && e.mission.status !== 'done' &&
@@ -947,6 +967,60 @@
       if (u.ai && this.t - (u.strikeSince || 0) > 2700) { this.log(u.side, `${u.callsign} strike aborted`, 'info'); this.orderRTB(u); }
       return { hdg: this.leash(u, bearing(u, ref)), spd: def.speed };
     }
+    // A diversion wants to be seen: radars on for the flight.
+    feintRadar(u) {
+      for (const x of [u, ...this.units.filter(w => w.lead === u)]) { x.radarMode = 'on'; this.setRadar(x, true); }
+    }
+    // At weapons release the whole package goes loud: the striker's wingmen and its escorts
+    // climb out of terrain hugging and switch their radars on, ready to fight their way home.
+    packageLoud(u) {
+      for (const e of this.units) {
+        if (e === u || e.side !== u.side || e.kind !== 'air' || e.state !== 'air' || e.def.role !== 'fighter' || dist(e, u) > 60) continue;
+        const ms = e.mission;
+        const mate = e.lead === u || u.lead === e || (u.lead && e.lead === u.lead);
+        const escort = ms && ms.kind === 'escort' && ms.status !== 'done' && (ms.escortUnit === u || ms.escortUnit === u.lead || (u.mission && ms.escortOf === u.mission.id));
+        if (!mate && !escort) continue;
+        if (e.radarMode === 'low' || e.radarMode === 'off') e.radarMode = 'auto';
+        this.setRadar(e, true);
+      }
+    }
+    // Diversion: a bait that keeps the defenders busy. It flies at the fake target with radars
+    // on, as if it were a strike, and holds 70 km short of it. When enemy fighters come within
+    // 40 km (or a missile is on its way) it drags them back toward the border, then turns in
+    // again. It goes home after 25 minutes or at bingo fuel.
+    steerFeint(u, o) {
+      const ref = this.refFor(o.list[0].kind, o.list[0].id);
+      if (!ref) { this.orderRTB(u); return { hdg: u.hdg, spd: u.def.speed }; }
+      u.feintSince = u.feintSince || this.t;
+      if (this.t - u.feintSince > 1500) {
+        o.done = true;
+        if (u.side === this.player) this.log(u.side, `${u.callsign} diversion over, heading home`, 'info');
+        this.orderRTB(u);
+        return { hdg: u.hdg, spd: u.def.speed };
+      }
+      const home = geo.sideOf(u.x, u.y) === u.side;
+      const threat = u.threats.length > 0 || this.enemyFightersNear(u, 40);
+      if (o.mode !== 'drag' && threat && !home) {
+        o.mode = 'drag';
+        if (u.side === this.player && this.t - (o.toldAt || -99) > 60) {
+          o.toldAt = this.t;
+          const drawn = this.units.filter(e => e.side !== u.side && e.kind === 'air' && e.state === 'air' &&
+            (e.engage === u || (e.order && e.order.type === 'attack' && e.order.target === u))).length;
+          this.log(u.side, `${u.callsign} diversion dragging ${drawn || 'the'} enemy fighter${drawn === 1 ? '' : 's'} back toward the border`, 'good');
+        }
+      }
+      if (o.mode === 'drag') {
+        if (home && geo.frontierDist(u.x, u.y) > 25) o.mode = 'in';
+        else {
+          const b = this.base(u.base) || this.nearestOpenBase(u.side, u, u.type);
+          return { hdg: b ? bearing(u, b) : u.hdg + Math.PI, spd: u.def.dash };
+        }
+      }
+      const wp = this.viaAim(u, o);
+      if (wp) return { hdg: bearing(u, wp), spd: u.def.speed };
+      if (dist(u, ref) < 70) { o.hold = o.hold || { x: u.x, y: u.y, r: 12 }; return this.orbitAt(u, o.hold); }
+      return { hdg: bearing(u, ref), spd: u.def.speed };
+    }
     // Waiting for an escort: orbit inside our own airspace, well back from the border.
     holdSafe(u) {
       if (geo.sideOf(u.x, u.y) !== u.side || geo.frontierDist(u.x, u.y) < 20) return { hdg: bearing(u, this.base(u.base)), spd: u.def.speed };
@@ -962,12 +1036,16 @@
       return false;
     }
     strikeDone(u) {
+      u.egress = true;
       this.log(u.side, `${u.callsign} weapons released, egressing`, 'info');
       if (u.ai || !this.hasAAM(u)) this.orderRTB(u);
       else u.order = { type: 'orbit', x: u.x + Math.sin(u.hdg + Math.PI) * 40, y: u.y - Math.cos(u.hdg + Math.PI) * 40, r: 15 };
     }
     orderRTB(u, baseId) {
-      const b = baseId ? this.base(baseId) : (this.baseOpen(this.base(u.base)) ? this.base(u.base) : this.nearestOpenBase(u.side, u, u.type));
+      // Home base if it's open and within reach on the fuel left, otherwise the nearest open base.
+      const home = this.base(u.base);
+      const reach = home && u.kind === 'air' && u.fuel > dist(u, home) / u.def.speed * 1.2 + 300;
+      const b = baseId ? this.base(baseId) : (home && this.baseOpen(home) && reach ? home : this.nearestOpenBase(u.side, u, u.type));
       u.order = { type: 'rtb', base: b ? b.id : u.base };
       u.engage = null;
     }
@@ -980,7 +1058,9 @@
       let aim = null, hit = null;
       if (o.type === 'drone' && o.list && o.list.length) {
         while (o.list.length && !this.isAlive(this.refFor(o.list[0].kind, o.list[0].id))) o.list.shift();
-        if (o.list.length) { aim = this.refFor(o.list[0].kind, o.list[0].id); hit = aim; }
+        const wp = this.viaAim(u, o);
+        if (wp) aim = wp;
+        else if (o.list.length) { aim = this.refFor(o.list[0].kind, o.list[0].id); hit = aim; }
       } else if (o.type === 'sead' || (o.type === 'orbit' && def.mission === 'sead')) {
         // Anti-radiation seeker: home on the nearest enemy emitter within 45 km.
         let best = null, bd = 45;
@@ -1001,9 +1081,12 @@
       const attackMode = o.type === 'drone';
       const n = attackMode ? Math.max(1, Math.ceil(u.count / Math.max(1, o.list.length))) : 1;
       let hits = 0;
+      // Small warheads: one swarm can damage a target (at most 2 of its 3 hits), but finishing
+      // it off takes a proper strike.
+      const cap = u.def.mission === 'attack' ? 2 : Infinity;
       for (let i = 0; i < n && u.count > 0; i++) {
         u.count--;
-        if (this.rand() > 0.6) continue;
+        if (this.rand() > 0.6 || hits >= cap) continue;
         hits++;
         this.applyHit(ref, u.side, true);
       }
@@ -1075,8 +1158,9 @@
       const enemies = this.targetsOf(ENEMY[u.side]);
       let best = null, bestScore = -1;
       for (const t of enemies) {
+        if (this.isDrone(t)) continue;               // drone swarms are a job for SAMs, not fighters
         if (!this.fireQuality(u, t)) continue;
-        const cheap = t.kind === 'cruise' || this.isDrone(t);
+        const cheap = t.kind === 'cruise';
         if (cheap && u.order && u.order.type === 'strike') continue;
         const want = t.kind === 'air' ? t.count : 1;
         if (this.inFlightAt(u.side, t) >= Math.min(want, this.isDrone(t) ? 1 : want)) continue;
@@ -1093,6 +1177,7 @@
 
     tryFire(u, t, factor) {
       if (this.t - u.lastShot < 3) return false;
+      if (u.kind === 'air' && this.isDrone(t)) return false;
       if (!this.fireQuality(u, t)) return false;
       // Two missiles per enemy aircraft (it takes two hits to bring one down).
       const want = this.manned(t) ? 2 : 1;
@@ -1302,7 +1387,7 @@
 
     launchCruise(u, k, ref) {
       const w = WEAPONS[k];
-      if (u.kind === 'air') this.setRadar(u, true);   // weapons release needs the radar on
+      if (u.kind === 'air') { this.setRadar(u, true); this.packageLoud(u); }   // weapons release needs the radar on
       u.wpn[k]--;
       const m = {
         id: this.nextId++, kind: 'cruise', side: u.side, wkey: k, w, x: u.x, y: u.y,
@@ -1348,6 +1433,22 @@
     // ---------- SAMs ----------
     updateSam(u) {
       if (u.salvo) this.fireSalvo(u);
+      // An empty battery reloads (the loading bar on the map shows progress).
+      if (u.ammo <= 0 && !u.reloadAt && !u.dry) {
+        if (u.reloads > 0) {
+          u.reloads--;
+          u.reloadAt = this.t + SAM_RELOAD;
+          this.log(u.side, `${u.callsign} out of missiles: reloading, ready in ${SAM_RELOAD / 60} min (last spare magazine)`, 'warn');
+        } else {
+          u.dry = true;
+          this.log(u.side, `${u.callsign} out of missiles, no reloads left tonight`, 'loss');
+        }
+        this.log(ENEMY[u.side], `${u.callsign} has stopped firing: probably out of missiles`, 'good');
+      }
+      if (u.reloadAt && this.t >= u.reloadAt) {
+        u.reloadAt = null; u.ammo = u.def.ammo;
+        this.log(u.side, `${u.callsign} reloaded: ${u.ammo} missiles ready`, 'good');
+      }
       if (!u.radarOn || u.ammo <= 0 || this.t - u.lastShot < 4) return;
       let best = null, bestScore = -Infinity;
       for (const t of this.targetsOf(ENEMY[u.side])) {
@@ -1367,7 +1468,9 @@
       if (!u.order || u.order.type !== 'orbit' || !u.cap) return;
       if (u.engage && !this.isAlive(u.engage)) u.engage = null;
       if (u.engage && dist(u, u.cap) > 140) u.engage = null;
-      if (!u.engage && this.hasAAM(u)) {
+      // Radar off / low level: hold fire, don't go looking for a fight.
+      const quiet = (u.radarMode === 'off' || u.radarMode === 'low') && !u.exposed;
+      if (!u.engage && this.hasAAM(u) && !quiet) {
         const commit = Math.max(60, this.bestRange(u) * 1.3);
         // Patrols guarding an asset also go after cruise missiles.
         const guard = u.mission && u.mission.patrolOf;
@@ -1540,7 +1643,7 @@
     // kind: cap | aew | strike | escort | sead | attack. A CAP or AEW&C mission keeps its
     // station manned: when a flight heads home, a relief flight launches from the base.
     createMission(m) {
-      const pre = m.auto ? 'DEFEND' : { cap: 'CAP', aew: 'AEW', strike: 'STRIKE', escort: 'ESCORT', sead: 'SEAD', attack: 'ATTACK', chase: 'CHASE' }[m.kind];
+      const pre = m.auto ? 'DEFEND' : { cap: 'CAP', aew: 'AEW', strike: 'STRIKE', escort: 'ESCORT', sead: 'SEAD', attack: 'ATTACK', chase: 'CHASE', feint: 'DIVERSION' }[m.kind];
       this.missionNo[pre] = (this.missionNo[pre] || 0) + 1;
       const ms = {
         id: this.nextId++, name: `${pre}-${this.missionNo[pre]}`, status: 'planned', unit: null, flights: 0,
@@ -1593,10 +1696,17 @@
       if (ms.kind === 'chase') u.anchor = { x: u.x, y: u.y, r: 15 };
       if (u.order.type === 'strike' || u.order.type === 'drone') u.strikeSince = this.t;
       ms.flights = Math.max(1, ms.flights);
+      if (ms.kind === 'feint') this.feintRadar(u);
       ms.status = 'airborne';
       if (ms.kind === 'escort') this.steerEscort(ms, u);
     }
     missionOrder(ms) {
+      const o = this.missionOrder0(ms);
+      if (ms.via && ms.via.length && (o.type === 'strike' || o.type === 'drone' || o.type === 'feint')) o.via = ms.via.map(p => ({ x: p.x, y: p.y }));
+      return o;
+    }
+    missionOrder0(ms) {
+      if (ms.kind === 'feint') return { type: 'feint', list: [{ ...ms.target }] };
       if (ms.kind === 'chase') return { type: 'attack', target: ms.prey };
       if (ms.kind === 'strike' && ms.unit && ms.unit.state === 'air') {
         const n = Object.entries(ms.unit.wpn).filter(([k]) => WEAPONS[k].kind === 'cruise').reduce((a, [, c]) => a + c, 0);
@@ -1619,7 +1729,7 @@
         const u = ms.unit, alive = u && u.state === 'air';
         if (alive) {
           const home = u.order && u.order.type === 'rtb';
-          ms.status = home ? 'returning' : ms.kind === 'strike' ? (u.order.type === 'strike' ? 'inbound' : 'egress') : ms.kind === 'escort' ? 'escorting' : ms.kind === 'chase' ? 'chasing' : 'on station';
+          ms.status = home ? 'returning' : ms.kind === 'feint' ? (u.order.mode === 'drag' ? 'dragging them back' : 'diverting') : ms.kind === 'strike' ? (u.order.type === 'strike' ? 'inbound' : 'egress') : ms.kind === 'escort' ? 'escorting' : ms.kind === 'chase' ? 'chasing' : 'on station';
           if (ms.kind === 'escort' && !home) this.steerEscort(ms, u);
           if (ms.kind === 'chase' && !home) this.checkChase(ms, u);
           if (ms.patrolOf && !home) this.checkPatrol(ms, u);
@@ -1639,6 +1749,7 @@
         if (alive) u.mission = null;                   // the old flight just flies home
         r.mission = ms;
         for (const w of r.wing || []) { w.mission = ms; if (ms.kind === 'chase') w.anchor = { x: w.x, y: w.y, r: 15 }; }
+        if (ms.kind === 'feint') this.feintRadar(r);
         ms.unit = r;
         ms.flights++;
         ms.status = 'launching';
@@ -1744,7 +1855,7 @@
           const e = tr.ref;
           if (chased.has(e) || !this.isAlive(e) || e.ghost) continue;
           if (e.kind !== 'cruise' && e.kind !== 'air') continue;
-          if (e.kind === 'air' && e.def.role === 'aew') continue;
+          if (e.kind === 'air' && (e.def.role === 'aew' || this.isDrone(e))) continue;   // fighters can't stop drones
           const p = this.trackPos(tr);
           if (geo.sideOf(p.x, p.y) !== side && geo.frontierDist(p.x, p.y) > 25) continue;
           const d = dist(b, p);
@@ -1766,11 +1877,11 @@
       const s = ms.escortUnit ? null : this.missions.find(x => x.id === ms.escortOf);
       const st = ms.escortUnit || (s && s.unit);
       if (!st || st.state !== 'air' || (st.order && st.order.type === 'rtb')) {
-        if (u.order.type !== 'rtb') this.orderRTB(u);
+        if (u.order.type !== 'rtb') { this.orderRTB(u); u.egress = !!(st && st.egress); }
         return;
       }
       const job = st.order && st.order.list && st.order.list[0];
-      const ref = (job && this.refFor(job.kind, job.id)) || (s && s.target && this.refFor(s.target.kind, s.target.id)) || st;
+      const ref = (st.order && st.order.via && st.order.via[0]) || (job && this.refFor(job.kind, job.id)) || (s && s.target && this.refFor(s.target.kind, s.target.id)) || st;
       const h = bearing(st, ref);
       const p = { x: st.x + Math.sin(h) * 20, y: st.y - Math.cos(h) * 20 };
       u.order = { type: 'orbit', x: p.x, y: p.y, r: 10 };
@@ -1848,5 +1959,5 @@
     }
   }
 
-  Object.assign(KC, { Sim, EW, FORMATION, FORM_KM, util: { clamp, angNorm, dist, bearing, vel, DEG, ENEMY } });
+  Object.assign(KC, { Sim, EW, FORMATION, FORM_KM, SAM_RELOAD, util: { clamp, angNorm, dist, bearing, vel, DEG, ENEMY } });
 })(globalThis.KC);

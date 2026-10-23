@@ -459,7 +459,28 @@
       }
     }
 
+    // A route as a dashed line through its waypoints (numbered), ending at the target.
+    route(from, pts, end, color) {
+      const c = this.ctx;
+      c.setLineDash([4, 4]); c.lineDashOffset = -performance.now() / 60;
+      c.strokeStyle = color; c.globalAlpha = 0.85; c.lineWidth = 1.2;
+      c.beginPath(); c.moveTo(from.x, from.y);
+      for (const q of [...pts, end].filter(Boolean)) { const p = this.toScreen(q.x, q.y); c.lineTo(p.x, p.y); }
+      c.stroke(); c.setLineDash([]); c.lineDashOffset = 0; c.globalAlpha = 1;
+      pts.forEach((q, i) => {
+        const p = this.toScreen(q.x, q.y);
+        c.strokeStyle = color; c.beginPath(); c.arc(p.x, p.y, 4, 0, Math.PI * 2); c.stroke();
+        this.label(`${i + 1}`, p.x + 7, p.y - 6, color, 'left', 9);
+      });
+    }
     drawOrders(sim, ui) {
+      // Planning: preview the route from the base (or the flight) to the chosen target.
+      const pl = ui.plan;
+      if (pl && (pl.target || (pl.via && pl.via.length))) {
+        const src = pl.unit || sim.base(pl.base);
+        const t = pl.target && sim.refFor(pl.target.kind, pl.target.id);
+        if (src) this.route(this.toScreen(src.x, src.y), pl.via || [], t, COL.hot);
+      }
       const sel = ui.sel && ui.sel.ref;
       if (!sel || sel.kind !== 'air' || sel.state !== 'air') return;
       const o = sel.order;
@@ -480,10 +501,11 @@
       } else if (o && o.type === 'orbit') {
         dashTo(o.x, o.y);
         this.circle(o.x, o.y, o.r, col, 0.5, [2, 3]);
-      } else if (o && (o.type === 'strike' || o.type === 'drone') && o.list.length) {
+      } else if (o && (o.type === 'strike' || o.type === 'drone' || o.type === 'feint') && o.list.length) {
         const s = sim.refFor(o.list[0].kind, o.list[0].id);
-        if (s) {
-          dashTo(s.x, s.y, COL.site);
+        if (s && o.via && o.via.length) this.route(from, o.via, s, o.type === 'feint' ? col : COL.site);
+        else if (s && !(o.type === 'feint' && o.mode === 'drag')) dashTo(s.x, s.y, o.type === 'feint' ? col : COL.site);
+        if (s && o.type !== 'feint') {
           const wk = sim.strikeWeapon(sel);
           if (wk) this.circle(s.x, s.y, WEAPONS[wk].range * 0.9, COL.site, 0.4, [6, 6]);
         }
@@ -674,8 +696,10 @@
         if (u.dead) { this.wreck(p, u.callsign); continue; }
         const half = 0;
         // A damaged jet (one more hit downs it) is drawn amber.
-        if (u.kind === 'air') this.glyph('air', u.def.role, p.x, p.y, u.hdg, u.dmg > 0 ? COL.hot : col, { hollow: !u.radarOn || u.dmg > 0, glow: !u.ghost, dashed: u.ghost, type: u.type });
+        if (u.kind === 'air' && u.def.role === 'drone' && u.count > 1) this.swarm(u, p, col);
+        else if (u.kind === 'air') this.glyph('air', u.def.role, p.x, p.y, u.hdg, u.dmg > 0 ? COL.hot : col, { hollow: !u.radarOn || u.dmg > 0, glow: !u.ghost, dashed: u.ghost, type: u.type });
         else this.glyph(u.kind, u.def.role, p.x, p.y, u.hdg, col, { dashed: !u.radarOn });
+        if (u.kind === 'sam' && !u.dead) this.samBar(sim, u, p);
         const lx = p.x + 11;
         if (u.kind === 'air' && u.defending) this.label(u.defMode === 'notch' ? 'NOTCH' : 'DRAG', p.x - 11, p.y + 14, COL.site, 'right', 9);
         else if (u.kind === 'air' && u.exposed && !tucked) this.label('EXPOSED', p.x - 11, p.y + 14, COL.site, 'right', 9);
@@ -697,6 +721,33 @@
         } else if (u.kind !== 'air' && (this.view.scale > 0.9 || sel)) {
           this.label(u.callsign, p.x + 9, p.y, COL.dim, 'left', 9);
         }
+      }
+    }
+
+    // A drone swarm: a cloud of tiny dots, one per drone (up to 60), drifting slightly.
+    swarm(u, p, col, n) {
+      const c = this.ctx, count = n || u.count, k = Math.min(60, count);
+      const R = Math.min(22, 3 + Math.sqrt(count) * 1.5), now = performance.now() / 700;
+      c.fillStyle = col;
+      for (let i = 0; i < k; i++) {
+        const a = i * 2.39996 + Math.sin(now + i * 1.3) * 0.25 + u.hdg;
+        const r = R * Math.sqrt((i + 0.5) / k) * (1 + Math.sin(now * 1.7 + i) * 0.08);
+        c.fillRect(p.x + Math.cos(a) * r - 0.8, p.y + Math.sin(a) * r - 0.8, 1.6, 1.6);
+      }
+    }
+    // SAM magazine: a bar of remaining missiles, or a reload bar once it has run dry.
+    samBar(sim, u, p) {
+      const c = this.ctx, w = 22, x = p.x - w / 2, y = p.y + 9;
+      c.fillStyle = 'rgba(0,0,0,0.6)'; c.fillRect(x - 1, y - 1, w + 2, 5);
+      if (u.reloadAt) {
+        const f = Math.max(0, Math.min(1, 1 - (u.reloadAt - sim.t) / KC.SAM_RELOAD));
+        c.fillStyle = COL.hot; c.fillRect(x, y, w * f, 3);
+        if (this.view.scale > 0.5) this.label(`RELOADING ${Math.ceil((u.reloadAt - sim.t) / 60)}m`, p.x, y + 10, COL.hot, 'center', 8);
+      } else if (u.dry) {
+        if (this.view.scale > 0.5) this.label('EMPTY', p.x, y + 10, COL.site, 'center', 8);
+      } else {
+        const f = u.ammo / u.def.ammo;
+        c.fillStyle = f > 0.5 ? COL[u.side] : COL.site; c.fillRect(x, y, w * f, 3);
       }
     }
 
@@ -811,10 +862,12 @@
         const tucked = !!ltr && e.inForm;
         const half = 0;
         if (e.kind === 'air') {
-          this.glyph('air', e.def.role, p.x, p.y, e.hdg, col, { hollow: true, dashed: esm, glow: !esm && !stale, type: e.type });
+          if (e.def.role === 'drone' && (tr.count || e.count) > 1 && !esm) this.swarm(e, p, col, tr.count || e.count);
+          else this.glyph('air', e.def.role, p.x, p.y, e.hdg, col, { hollow: true, dashed: esm, glow: !esm && !stale, type: e.type });
           if (esm) { c.strokeStyle = col; c.beginPath(); c.arc(p.x, p.y, 10, 0, Math.PI * 2); c.setLineDash([2, 3]); c.stroke(); c.setLineDash([]); }
         } else if (e.dead) { this.wreck(p, e.callsign); c.globalAlpha = 1; continue; }
         else this.glyph(e.kind, null, p.x, p.y, 0, col, {});
+        if (e.kind === 'sam' && !e.dead) this.samBar(sim, e, p);
         const sel = ui.sel && ui.sel.ref === e;
         if (sel) { c.strokeStyle = COL.white; c.strokeRect(p.x - 11 - half, p.y - 11 - half, 22 + half * 2, 22 + half * 2); }
         if (e.kind === 'air') {

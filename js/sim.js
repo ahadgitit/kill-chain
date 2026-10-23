@@ -1194,7 +1194,9 @@
       if (u.engage && dist(u, u.cap) > 140) u.engage = null;
       if (!u.engage && this.hasAAM(u)) {
         const commit = Math.max(60, this.bestRange(u) * 1.3);
-        const e = this.nearestEnemy(u, commit, true, true);
+        // Patrols guarding an asset also go after cruise missiles.
+        const guard = u.mission && u.mission.patrolOf;
+        const e = this.nearestEnemy(u, commit, !guard, true);
         if (e) { u.engage = e; u.anchor = { x: u.cap.x, y: u.cap.y, r: u.cap.r }; }
       }
     }
@@ -1431,6 +1433,7 @@
           ms.status = home ? 'returning' : ms.kind === 'strike' ? (u.order.type === 'strike' ? 'inbound' : 'egress') : ms.kind === 'escort' ? 'escorting' : ms.kind === 'chase' ? 'chasing' : 'on station';
           if (ms.kind === 'escort' && !home) this.steerEscort(ms, u);
           if (ms.kind === 'chase' && !home) this.checkChase(ms, u);
+          if (ms.patrolOf && !home) this.checkPatrol(ms, u);
           if (!home || !ms.repeat) continue;
         }
         const once = !ms.repeat;
@@ -1453,6 +1456,67 @@
         if (ms.kind === 'chase') { r.anchor = { x: r.x, y: r.y, r: 15 }; r.hdg = bearing(r, ms.prey); }
       }
       this.autoDefend();
+      if (this.cfg.autoPatrol) for (const s of SIDES) this.autoPatrol(s);
+    }
+    // Rule: when an enemy strike jet comes close to one of our ground assets (site, base,
+    // radar or SAM), the closest fighter (airborne or ready on the ground) patrols over it.
+    autoPatrol(side) {
+      this.patrolCd = this.patrolCd || {};
+      const assets = [
+        ...this.bases.filter(b => b.side === side),
+        ...this.sites.filter(s => s.side === side && (s.hits || 0) < 3),
+        ...this.units.filter(u => (u.kind === 'sam' || u.kind === 'radar') && u.side === side && !u.dead),
+      ];
+      const guarded = new Set(this.missions.filter(m => m.patrolOf && m.status !== 'done').map(m => m.patrolOf));
+      for (const tr of this.tracks[side].values()) {
+        const e = tr.ref;
+        if (e.kind !== 'air' || !this.isAlive(e) || !e.order || e.order.type !== 'strike') continue;
+        const p = this.trackPos(tr);
+        let asset = null, bd = 120;
+        for (const a of assets) { const d = dist(a, p); if (d < bd) { bd = d; asset = a; } }
+        if (!asset || guarded.has(asset) || (this.patrolCd[asset.id || asset.callsign] || 0) > this.t) continue;
+        // Closest fighter: free airborne fighters, or ready jets on the ground (take-off counts as 40 km).
+        let best = null, bestD = Infinity;
+        for (const u of this.units) {
+          if (u.side !== side || u.state !== 'air' || u.kind !== 'air' || u.ghost || u.def.role !== 'fighter' || !this.hasAAM(u)) continue;
+          // Only idle patrols can be re-tasked; never pull a jet off an intercept or escort.
+          if (u.mission && u.mission.status !== 'done' && (u.mission.kind !== 'cap' || u.mission.patrolOf)) continue;
+          if (u.engage || (u.order && u.order.type !== 'orbit')) continue;
+          const d = dist(u, asset);
+          if (d < bestD) { bestD = d; best = { unit: u }; }
+        }
+        if (this.airborne(side) < AIR_CAP[side]) {
+          for (const b of this.bases) {
+            if (b.side !== side || !this.baseOpen(b)) continue;
+            for (const [ty, pool] of Object.entries(b.pools)) {
+              if (AIRCRAFT[ty].role !== 'fighter' || !PRESETS[ty].AIR || pool.ready < 1) continue;
+              const d = dist(b, asset) + 40;
+              if (d < bestD) { bestD = d; best = { base: b.id, type: ty, n: Math.min(2, pool.ready) }; }
+            }
+          }
+        }
+        if (!best) continue;
+        this.patrolCd[asset.id || asset.callsign] = this.t + 180;
+        const m = { side, kind: 'cap', auto: true, patrolOf: asset, at: { x: asset.x, y: asset.y }, preset: 'AIR', repeat: false };
+        const ms = best.unit ? this.assignMission(best.unit, m) : this.createMission({ ...m, base: best.base, type: best.type, n: best.n });
+        if (ms.unit && ms.unit.order && ms.unit.order.type === 'orbit') ms.unit.order.r = 20;
+        guarded.add(asset);
+        if (side === this.player && ms.unit) this.log(side, `${ms.unit.callsign} patrolling over ${this.targetId(asset)}: enemy strike jet ${bd.toFixed(0)} km away`, 'warn');
+        this.patrolStats = this.patrolStats || { IN: 0, PK: 0 };
+        this.patrolStats[side]++;
+      }
+    }
+    // A patrol over a threatened asset ends once no enemy strike jet has been near it for 2 minutes.
+    checkPatrol(ms, u) {
+      const a = ms.patrolOf;
+      let near = false;
+      for (const tr of this.tracks[ms.side].values()) {
+        const e = tr.ref;
+        if (e.kind === 'air' && this.isAlive(e) && e.order && e.order.type === 'strike' && dist(this.trackPos(tr), a) < 150) { near = true; break; }
+      }
+      if (near) { ms.quietSince = null; return; }
+      ms.quietSince = ms.quietSince || this.t;
+      if (this.t - ms.quietSince > 120) { ms.status = 'done'; this.orderRTB(u); }
     }
     // A chase ends when the target is gone, lost, or has fled back into its own airspace.
     checkChase(ms, u) {
